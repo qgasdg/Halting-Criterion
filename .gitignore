@@ -1,0 +1,10 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.npy
+
+# PyTorch Lightning logs and checkpoints
+lightning_logs/
+
+
+data/

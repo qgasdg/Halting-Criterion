@@ -8,6 +8,11 @@ import pytorch_lightning as pl
 
 from src.models import ACTPuzzleSolver
 
+# Maze 데이터셋(`dataset/build_maze_dataset.py`)의 문자 집합.
+# 인코딩 규칙은 PAD=0, 그리고 CHARSET의 순서대로 1부터 할당된다.
+# 즉: "#"->1, " "->2, "S"->3, "G"->4, "o"->5
+MAZE_CHARSET = "# SGo"
+
 torch.set_float32_matmul_precision('medium')
 
 # 데이터셋 클래스 (나중엔 src/dataset.py로)
@@ -37,6 +42,9 @@ def main():
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--time_penalty", type=float, default=0.001)
+    parser.add_argument("--time_limit", type=int, default=20)
+    parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
     
     args = parser.parse_args()
 
@@ -59,11 +67,22 @@ def main():
         persistent_workers=True
     )
 
+    focus_token_id = None
+    if args.task == "maze":
+        # focus_token_id는 "특정 토큰 하나에 집중한 지표"를 계산할 때 쓰는 ID다.
+        # Maze에서는 정답 경로를 나타내는 문자 "o"를 focus 대상으로 사용한다.
+        # build_maze_dataset.py와 동일한 규칙(PAD=0, CHARSET 1-indexed)으로 계산한다.
+        focus_token_id = MAZE_CHARSET.index("o") + 1
+
     model = ACTPuzzleSolver(
         vocab_size=train_dataset.meta['vocab_size'],
         seq_len=train_dataset.meta['seq_len'],
         hidden_size=args.hidden_size,
-        time_penalty=args.time_penalty
+        time_penalty=args.time_penalty,
+        time_limit=args.time_limit,
+        learning_rate=args.learning_rate,
+        task_name=args.task,
+        focus_token_id=focus_token_id if focus_token_id is not None else -1,
     )
 
     trainer = pl.Trainer(

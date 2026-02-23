@@ -153,6 +153,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         learning_rate: float = 1e-3,
         task_name: str = "sudoku",
         focus_token_id: int = -1,
+        focus_loss_weight: float = 1.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -175,6 +176,7 @@ class ACTPuzzleSolver(pl.LightningModule):
 
         self.task_name = task_name
         self.focus_token_id = focus_token_id if focus_token_id >= 0 else None
+        self.focus_loss_weight = focus_loss_weight
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -193,7 +195,18 @@ class ACTPuzzleSolver(pl.LightningModule):
         logits, ponder_cost, steps, act_stats = self.forward(x)
         
         # Loss 계산
-        loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
+        if self.focus_token_id is not None and self.focus_loss_weight != 1.0:
+            token_loss = F.cross_entropy(logits.transpose(1, 2), y, reduction='none')
+            focus_mask = (y == self.focus_token_id).float()
+            weight_map = torch.where(
+                focus_mask > 0,
+                torch.full_like(focus_mask, self.focus_loss_weight),
+                torch.ones_like(focus_mask),
+            )
+            loss_cls = (token_loss * weight_map).mean()
+        else:
+            loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
+
         loss = loss_cls + ponder_cost
         
         preds = torch.argmax(logits, dim=-1)
@@ -216,6 +229,10 @@ class ACTPuzzleSolver(pl.LightningModule):
             self.log('focus_precision', focus_metrics['precision'], prog_bar=False)
             self.log('focus_recall', focus_metrics['recall'], prog_bar=False)
             self.log('focus_f1', focus_metrics['f1'], prog_bar=True)
+            focus_pred_ratio = (preds == self.focus_token_id).float().mean()
+            focus_target_ratio = (y == self.focus_token_id).float().mean()
+            self.log('focus_pred_ratio', focus_pred_ratio, prog_bar=False)
+            self.log('focus_target_ratio', focus_target_ratio, prog_bar=False)
         self.log('steps', steps.float().mean(), prog_bar=True)
         self.log('steps_p50', act_stats['steps_p50'], prog_bar=False)
         self.log('steps_p90', act_stats['steps_p90'], prog_bar=False)

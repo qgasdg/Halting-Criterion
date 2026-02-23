@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--time_penalty", type=float, default=0.001)
+    parser.add_argument("--maze_focus_loss_weight", type=float, default=5.0)
     parser.add_argument("--time_limit", type=int, default=20)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
@@ -85,7 +86,8 @@ def main():
 
     print(
         f"[startup] split=train size={len(train_dataset)}, split={val_split} size={len(val_dataset)}, "
-        f"num_workers={args.num_workers}, persistent_workers={use_persistent_workers}, mmap_mode={args.mmap_mode}",
+        f"num_workers={args.num_workers}, persistent_workers={use_persistent_workers}, mmap_mode={args.mmap_mode}, "
+        f"maze_focus_loss_weight={args.maze_focus_loss_weight if args.task == 'maze' else 1.0}",
         flush=True,
     )
 
@@ -115,6 +117,7 @@ def main():
         learning_rate=args.learning_rate,
         task_name=args.task,
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
+        focus_loss_weight=args.maze_focus_loss_weight if args.task == "maze" else 1.0,
     )
 
     checkpoint_callback = ModelCheckpoint(

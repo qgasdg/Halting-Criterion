@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
+    parser.add_argument("--num_workers", type=int, default=4)
     
     args = parser.parse_args()
 
@@ -56,19 +57,21 @@ def main():
     val_split = 'test' if os.path.exists(os.path.join(args.data_dir, 'test')) else 'train'
     val_dataset = NpyPuzzleDataset(args.data_dir, split=val_split)
 
+    use_persistent_workers = args.num_workers > 0
+
     train_loader = DataLoader(
-    train_dataset, 
-    batch_size=args.batch_size, 
-    shuffle=True, 
-    num_workers=4, 
-    persistent_workers=True 
+    train_dataset,
+    batch_size=args.batch_size,
+    shuffle=True,
+    num_workers=args.num_workers,
+    persistent_workers=use_persistent_workers
     )
 
     val_loader = DataLoader(
-        val_dataset, 
-        batch_size=args.batch_size, 
-        num_workers=4, 
-        persistent_workers=True
+        val_dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        persistent_workers=use_persistent_workers
     )
 
     focus_token_id = None

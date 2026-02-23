@@ -26,6 +26,7 @@ class AdaptiveRNNCell(nn.Module):
         time_limit: int = 20,
         halt_epsilon: float = 0.01,
         dropout: float = 0.0,
+        halt_bias_init: float = -2.0,
     ):
         super().__init__()
         self.input_size = input_size
@@ -34,13 +35,15 @@ class AdaptiveRNNCell(nn.Module):
         self.time_limit = time_limit
         self.halt_epsilon = halt_epsilon
         self.dropout = dropout
+        self.halt_bias_init = halt_bias_init
 
         # 입력 사이즈 + 1 (Flag용: 1=First step, 0=Pondering)
         self.rnn_cell = nn.GRUCell(input_size + 1, hidden_size)
         
         self.halting_layer = nn.Linear(hidden_size, 1)
-        # Bias 양수 초기화: 초반에는 생각 적게 하고 쉬운 것부터 학습
-        self.halting_layer.bias.data.fill_(1.0)
+        # Bias 음수 초기화: 초반에는 p_t를 낮춰 더 많은 step을 사용하도록 유도
+        # (step=1로 너무 빨리 수렴하는 현상 완화)
+        self.halting_layer.bias.data.fill_(self.halt_bias_init)
 
     def forward(self, input_tensor: torch.Tensor, hidden: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         batch_size = input_tensor.size(0)
@@ -154,6 +157,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         task_name: str = "sudoku",
         focus_token_id: int = -1,
         focus_loss_weight: float = 1.0,
+        halt_bias_init: float = -2.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -169,7 +173,8 @@ class ACTPuzzleSolver(pl.LightningModule):
             input_size=hidden_size, 
             hidden_size=hidden_size,
             time_penalty=time_penalty,
-            time_limit=time_limit
+            time_limit=time_limit,
+            halt_bias_init=halt_bias_init,
         )
         
         self.decoder = nn.Linear(hidden_size, seq_len * vocab_size)

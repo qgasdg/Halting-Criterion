@@ -6,7 +6,7 @@ from typing import Optional
 
 import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 
@@ -47,6 +47,8 @@ def main():
     parser.add_argument("--time_penalty", type=float, default=0.001)
     parser.add_argument("--maze_focus_loss_weight", type=float, default=5.0)
     parser.add_argument("--time_limit", type=int, default=20)
+    parser.add_argument("--halt_bias_init", type=float, default=-2.0)
+    parser.add_argument("--train_repeats_per_epoch", type=int, default=4)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
     parser.add_argument("--default_root_dir", type=str, default="runs")
@@ -67,10 +69,17 @@ def main():
     val_split = 'test' if os.path.exists(os.path.join(args.data_dir, 'test')) else 'train'
     val_dataset = NpyPuzzleDataset(args.data_dir, split=val_split, mmap_mode=mmap_mode)
 
+    if args.train_repeats_per_epoch < 1:
+        raise ValueError("--train_repeats_per_epoch must be >= 1")
+
+    effective_train_dataset = train_dataset
+    if args.train_repeats_per_epoch > 1:
+        effective_train_dataset = ConcatDataset([train_dataset] * args.train_repeats_per_epoch)
+
     use_persistent_workers = args.num_workers > 0
 
     train_loader = DataLoader(
-        train_dataset,
+        effective_train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
@@ -85,9 +94,11 @@ def main():
     )
 
     print(
-        f"[startup] split=train size={len(train_dataset)}, split={val_split} size={len(val_dataset)}, "
-        f"num_workers={args.num_workers}, persistent_workers={use_persistent_workers}, mmap_mode={args.mmap_mode}, "
-        f"maze_focus_loss_weight={args.maze_focus_loss_weight if args.task == 'maze' else 1.0}",
+        f"[startup] split=train size={len(train_dataset)} (effective={len(effective_train_dataset)}), "
+        f"split={val_split} size={len(val_dataset)}, num_workers={args.num_workers}, "
+        f"persistent_workers={use_persistent_workers}, mmap_mode={args.mmap_mode}, "
+        f"maze_focus_loss_weight={args.maze_focus_loss_weight if args.task == 'maze' else 1.0}, "
+        f"halt_bias_init={args.halt_bias_init}, train_repeats_per_epoch={args.train_repeats_per_epoch}",
         flush=True,
     )
 
@@ -118,6 +129,7 @@ def main():
         task_name=args.task,
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
         focus_loss_weight=args.maze_focus_loss_weight if args.task == "maze" else 1.0,
+        halt_bias_init=args.halt_bias_init,
     )
 
     checkpoint_callback = ModelCheckpoint(

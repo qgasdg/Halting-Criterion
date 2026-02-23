@@ -37,6 +37,11 @@ def main():
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--time_penalty", type=float, default=0.001)
+    parser.add_argument(
+        "--disable_ponder_cost",
+        action="store_true",
+        help="If set, train with classification loss only (ponder cost excluded from total loss).",
+    )
     
     args = parser.parse_args()
 
@@ -63,7 +68,8 @@ def main():
         vocab_size=train_dataset.meta['vocab_size'],
         seq_len=train_dataset.meta['seq_len'],
         hidden_size=args.hidden_size,
-        time_penalty=args.time_penalty
+        time_penalty=args.time_penalty,
+        use_ponder_cost=not args.disable_ponder_cost,
     )
 
     trainer = pl.Trainer(

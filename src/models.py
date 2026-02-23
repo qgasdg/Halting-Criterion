@@ -150,7 +150,8 @@ class ACTPuzzleSolver(pl.LightningModule):
         hidden_size: int = 256,
         time_penalty: float = 0.001,
         time_limit: int = 20,
-        learning_rate: float = 1e-3
+        learning_rate: float = 1e-3,
+        use_ponder_cost: bool = True
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -189,7 +190,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         
         # Loss 계산
         loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
-        loss = loss_cls + ponder_cost
+        loss = loss_cls + ponder_cost if self.hparams.use_ponder_cost else loss_cls
         
         preds = torch.argmax(logits, dim=-1)
         

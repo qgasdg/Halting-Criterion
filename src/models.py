@@ -26,6 +26,7 @@ class AdaptiveRNNCell(nn.Module):
         time_limit: int = 20,
         halt_epsilon: float = 0.01,
         dropout: float = 0.0,
+        halt_bias_init: float = -2.0,
     ):
         super().__init__()
         self.input_size = input_size
@@ -34,13 +35,14 @@ class AdaptiveRNNCell(nn.Module):
         self.time_limit = time_limit
         self.halt_epsilon = halt_epsilon
         self.dropout = dropout
+        self.halt_bias_init = halt_bias_init
 
         # 입력 사이즈 + 1 (Flag용: 1=First step, 0=Pondering)
         self.rnn_cell = nn.GRUCell(input_size + 1, hidden_size)
         
         self.halting_layer = nn.Linear(hidden_size, 1)
-        # Bias 양수 초기화: 초반에는 생각 적게 하고 쉬운 것부터 학습
-        self.halting_layer.bias.data.fill_(1.0)
+        # 초기에는 충분히 pondering 하도록 halting bias를 음수로 초기화
+        self.halting_layer.bias.data.fill_(self.halt_bias_init)
 
     def forward(self, input_tensor: torch.Tensor, hidden: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         batch_size = input_tensor.size(0)
@@ -153,6 +155,9 @@ class ACTPuzzleSolver(pl.LightningModule):
         learning_rate: float = 1e-3,
         task_name: str = "sudoku",
         focus_token_id: int = -1,
+        focus_loss_weight: float = 1.0,
+        act_halt_bias_init: float = -2.0,
+        ponder_warmup_epochs: int = 0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -168,13 +173,16 @@ class ACTPuzzleSolver(pl.LightningModule):
             input_size=hidden_size, 
             hidden_size=hidden_size,
             time_penalty=time_penalty,
-            time_limit=time_limit
+            time_limit=time_limit,
+            halt_bias_init=act_halt_bias_init,
         )
         
         self.decoder = nn.Linear(hidden_size, seq_len * vocab_size)
 
         self.task_name = task_name
         self.focus_token_id = focus_token_id if focus_token_id >= 0 else None
+        self.focus_loss_weight = focus_loss_weight
+        self.ponder_warmup_epochs = max(0, int(ponder_warmup_epochs))
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -193,8 +201,25 @@ class ACTPuzzleSolver(pl.LightningModule):
         logits, ponder_cost, steps, act_stats = self.forward(x)
         
         # Loss 계산
-        loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
-        loss = loss_cls + ponder_cost
+        if self.focus_token_id is not None and self.focus_loss_weight != 1.0:
+            token_loss = F.cross_entropy(logits.transpose(1, 2), y, reduction='none')
+            focus_mask = (y == self.focus_token_id).float()
+            weight_map = torch.where(
+                focus_mask > 0,
+                torch.full_like(focus_mask, self.focus_loss_weight),
+                torch.ones_like(focus_mask),
+            )
+            loss_cls = (token_loss * weight_map).mean()
+        else:
+            loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
+
+        if self.ponder_warmup_epochs > 0:
+            warmup_progress = min(1.0, float(self.current_epoch + 1) / float(self.ponder_warmup_epochs))
+            ponder_scale = warmup_progress
+        else:
+            ponder_scale = 1.0
+
+        loss = loss_cls + (ponder_cost * ponder_scale)
         
         preds = torch.argmax(logits, dim=-1)
         
@@ -210,12 +235,17 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.log('train_loss', loss, prog_bar=True)
         self.log('loss_cls', loss_cls, prog_bar=False)
         self.log('ponder_cost', ponder_cost, prog_bar=False)
+        self.log('ponder_scale', torch.tensor(ponder_scale, device=ponder_cost.device), prog_bar=False)
         self.log('puz_acc', acc_puzzle, prog_bar=True)  # 퍼즐 단위 (빡센 기준)
         self.log('cell_acc', acc_cell, prog_bar=True)   # 셀 단위 (너그러운 기준)
         if focus_metrics is not None:
             self.log('focus_precision', focus_metrics['precision'], prog_bar=False)
             self.log('focus_recall', focus_metrics['recall'], prog_bar=False)
             self.log('focus_f1', focus_metrics['f1'], prog_bar=True)
+            focus_pred_ratio = (preds == self.focus_token_id).float().mean()
+            focus_target_ratio = (y == self.focus_token_id).float().mean()
+            self.log('focus_pred_ratio', focus_pred_ratio, prog_bar=False)
+            self.log('focus_target_ratio', focus_target_ratio, prog_bar=False)
         self.log('steps', steps.float().mean(), prog_bar=True)
         self.log('steps_p50', act_stats['steps_p50'], prog_bar=False)
         self.log('steps_p90', act_stats['steps_p90'], prog_bar=False)

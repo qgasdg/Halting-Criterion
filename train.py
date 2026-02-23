@@ -1,9 +1,12 @@
 import argparse
 import os
 import json
+import time
+from typing import Optional
+
 import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, RandomSampler
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 
@@ -16,15 +19,15 @@ MAZE_CHARSET = "# SGo"
 
 torch.set_float32_matmul_precision('medium')
 
+
 # 데이터셋 클래스 (나중엔 src/dataset.py로)
 class NpyPuzzleDataset(Dataset):
-    def __init__(self, data_dir, split='train'):
+    def __init__(self, data_dir: str, split: str = 'train', mmap_mode: Optional[str] = None):
         split_dir = os.path.join(data_dir, split)
-        
-        # [메모리 최적화] mmap_mode='r' (파일을 메모리에 다 안 올리고 링크만 걺)
-        self.inputs = np.load(os.path.join(split_dir, "all__inputs.npy"), mmap_mode='r')
-        self.labels = np.load(os.path.join(split_dir, "all__labels.npy"), mmap_mode='r')
-        
+
+        self.inputs = np.load(os.path.join(split_dir, "all__inputs.npy"), mmap_mode=mmap_mode)
+        self.labels = np.load(os.path.join(split_dir, "all__labels.npy"), mmap_mode=mmap_mode)
+
         with open(os.path.join(split_dir, "dataset.json"), 'r') as f:
             self.meta = json.load(f)
 
@@ -32,9 +35,8 @@ class NpyPuzzleDataset(Dataset):
         return len(self.inputs)
 
     def __getitem__(self, idx):
-        # [데이터 로드] mmap 객체에서 필요한 부분만 복사해서 텐서로 변환
-        # np.array()로 감싸야 mmap에서 실제 메모리로 데이터가 복사됨
         return torch.from_numpy(np.array(self.inputs[idx])).long(), torch.from_numpy(np.array(self.labels[idx])).long()
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -43,33 +45,78 @@ def main():
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--time_penalty", type=float, default=0.001)
+    parser.add_argument("--maze_focus_loss_weight", type=float, default=5.0)
     parser.add_argument("--time_limit", type=int, default=20)
+    parser.add_argument("--act_halt_bias_init", type=float, default=-2.0)
+    parser.add_argument("--ponder_warmup_epochs", type=int, default=20)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
-    
+    parser.add_argument("--train_repeat_factor", type=int, default=1)
+    parser.add_argument("--save_last", type=int, choices=[0, 1], default=1)
+    parser.add_argument("--save_weights_only", action="store_true")
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--mmap_mode", type=str, choices=["none", "r"], default="none")
+    parser.add_argument("--probe_first_batch", action="store_true")
+
     args = parser.parse_args()
 
-    train_dataset = NpyPuzzleDataset(args.data_dir, split='train')
+    save_last = bool(args.save_last)
+    mmap_mode = None if args.mmap_mode == "none" else args.mmap_mode
+
+    train_dataset = NpyPuzzleDataset(args.data_dir, split='train', mmap_mode=mmap_mode)
     val_split = 'test' if os.path.exists(os.path.join(args.data_dir, 'test')) else 'train'
-    val_dataset = NpyPuzzleDataset(args.data_dir, split=val_split)
+    val_dataset = NpyPuzzleDataset(args.data_dir, split=val_split, mmap_mode=mmap_mode)
+
+    use_persistent_workers = args.num_workers > 0
+
+    if args.train_repeat_factor > 1:
+        train_sampler = RandomSampler(
+            train_dataset,
+            replacement=True,
+            num_samples=len(train_dataset) * args.train_repeat_factor,
+        )
+        train_shuffle = False
+    else:
+        train_sampler = None
+        train_shuffle = True
 
     train_loader = DataLoader(
-    train_dataset, 
-    batch_size=args.batch_size, 
-    shuffle=True, 
-    num_workers=4, 
-    persistent_workers=True 
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=train_shuffle,
+        sampler=train_sampler,
+        num_workers=args.num_workers,
+        persistent_workers=use_persistent_workers,
     )
 
     val_loader = DataLoader(
-        val_dataset, 
-        batch_size=args.batch_size, 
-        num_workers=4, 
-        persistent_workers=True
+        val_dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        persistent_workers=use_persistent_workers,
     )
+
+    print(
+        f"[startup] split=train size={len(train_dataset)}, split={val_split} size={len(val_dataset)}, "
+        f"num_workers={args.num_workers}, persistent_workers={use_persistent_workers}, mmap_mode={args.mmap_mode}, "
+        f"maze_focus_loss_weight={args.maze_focus_loss_weight if args.task == 'maze' else 1.0}, "
+        f"act_halt_bias_init={args.act_halt_bias_init}, train_repeat_factor={args.train_repeat_factor}, "
+        f"ponder_warmup_epochs={args.ponder_warmup_epochs}",
+        flush=True,
+    )
+
+    if args.probe_first_batch:
+        print("[startup] probing first train batch...", flush=True)
+        t0 = time.time()
+        first_x, first_y = next(iter(train_loader))
+        dt = time.time() - t0
+        print(
+            f"[startup] first batch loaded in {dt:.2f}s, x={tuple(first_x.shape)}, y={tuple(first_y.shape)}",
+            flush=True,
+        )
 
     focus_token_id = None
     if args.task == "maze":
@@ -87,14 +134,24 @@ def main():
         learning_rate=args.learning_rate,
         task_name=args.task,
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
+        focus_loss_weight=args.maze_focus_loss_weight if args.task == "maze" else 1.0,
+        act_halt_bias_init=args.act_halt_bias_init,
+        ponder_warmup_epochs=args.ponder_warmup_epochs,
     )
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join(args.default_root_dir, "checkpoints"),
         filename="epoch{epoch:03d}-step{step}",
-        save_last=True,
+        save_last=save_last,
         save_top_k=-1,
         every_n_epochs=args.save_every_n_epochs,
+        save_weights_only=args.save_weights_only,
+    )
+
+    print(
+        f"[startup] checkpoint: every_n_epochs={args.save_every_n_epochs}, "
+        f"save_last={save_last}, save_weights_only={args.save_weights_only}",
+        flush=True,
     )
 
     trainer = pl.Trainer(
@@ -107,7 +164,9 @@ def main():
     )
 
     trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
-    trainer.test(model, val_loader, ckpt_path="last")
+    test_ckpt_path = "last" if save_last else None
+    trainer.test(model, val_loader, ckpt_path=test_ckpt_path)
+
 
 if __name__ == "__main__":
     main()

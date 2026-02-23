@@ -1,4 +1,4 @@
-# Maze 4-hour Runbook (A40, Slurm 안전 재시작 포함)
+# Maze 4-hour Runbook
 
 ## 왜 안전장치가 필요한가?
 Slurm `--time=04:00:00`이 끝나면 프로세스는 종료됩니다.
@@ -102,6 +102,4 @@ tail -n 100 ${OUT_DIR}/train.log
 ---
 
 ## 권장 팁
-- 네, 질문하신 상황에서는 **안전장치(체크포인트 + 재시작)**를 거는 게 맞습니다.
 - `timeout 4h`보다 Slurm walltime을 신뢰하고, 체크포인트로 복구하는 방식이 더 직관적입니다.
-- 가능하면 `tmux`/`screen` 사용 가능한 환경이면 로그 모니터링이 편합니다.

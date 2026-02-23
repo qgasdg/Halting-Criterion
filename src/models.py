@@ -150,7 +150,9 @@ class ACTPuzzleSolver(pl.LightningModule):
         hidden_size: int = 256,
         time_penalty: float = 0.001,
         time_limit: int = 20,
-        learning_rate: float = 1e-3
+        learning_rate: float = 1e-3,
+        task_name: str = "sudoku",
+        focus_token_id: int = -1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -170,6 +172,9 @@ class ACTPuzzleSolver(pl.LightningModule):
         )
         
         self.decoder = nn.Linear(hidden_size, seq_len * vocab_size)
+
+        self.task_name = task_name
+        self.focus_token_id = focus_token_id if focus_token_id >= 0 else None
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -198,6 +203,8 @@ class ACTPuzzleSolver(pl.LightningModule):
         
         # 2. [추가] 셀 정답률 (81칸 중 몇 칸 맞았는지)
         acc_cell = (preds == y).float().mean()
+
+        focus_metrics = self._compute_focus_metrics(preds, y)
         
         
         self.log('train_loss', loss, prog_bar=True)
@@ -205,6 +212,10 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.log('ponder_cost', ponder_cost, prog_bar=False)
         self.log('puz_acc', acc_puzzle, prog_bar=True)  # 퍼즐 단위 (빡센 기준)
         self.log('cell_acc', acc_cell, prog_bar=True)   # 셀 단위 (너그러운 기준)
+        if focus_metrics is not None:
+            self.log('focus_precision', focus_metrics['precision'], prog_bar=False)
+            self.log('focus_recall', focus_metrics['recall'], prog_bar=False)
+            self.log('focus_f1', focus_metrics['f1'], prog_bar=True)
         self.log('steps', steps.float().mean(), prog_bar=True)
         self.log('steps_p50', act_stats['steps_p50'], prog_bar=False)
         self.log('steps_p90', act_stats['steps_p90'], prog_bar=False)
@@ -224,8 +235,15 @@ class ACTPuzzleSolver(pl.LightningModule):
         
         is_correct = (preds == y).all(dim=1)
         acc_puzzle = is_correct.float().mean()
+        acc_cell = (preds == y).float().mean()
+        focus_metrics = self._compute_focus_metrics(preds, y)
         
         self.log('test_acc', acc_puzzle)
+        self.log('test_cell_acc', acc_cell)
+        if focus_metrics is not None:
+            self.log('test_focus_precision', focus_metrics['precision'])
+            self.log('test_focus_recall', focus_metrics['recall'])
+            self.log('test_focus_f1', focus_metrics['f1'])
         self.log('test_steps', steps.float().mean())
         self.log('test_steps_p50', act_stats['steps_p50'])
         self.log('test_steps_p90', act_stats['steps_p90'])
@@ -236,3 +254,26 @@ class ACTPuzzleSolver(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+
+    def _compute_focus_metrics(self, preds: torch.Tensor, y: torch.Tensor):
+        # focus_token_id가 설정되면, 해당 토큰(예: Maze 경로 토큰 "o")만 대상으로
+        # precision/recall/F1을 계산한다. 설정되지 않으면 지표를 비활성화한다.
+        if self.focus_token_id is None:
+            return None
+
+        pred_focus = preds == self.focus_token_id
+        true_focus = y == self.focus_token_id
+
+        tp = (pred_focus & true_focus).sum().float()
+        fp = (pred_focus & (~true_focus)).sum().float()
+        fn = ((~pred_focus) & true_focus).sum().float()
+
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1 = 2 * precision * recall / (precision + recall + 1e-8)
+
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+        }

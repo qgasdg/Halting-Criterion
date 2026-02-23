@@ -51,12 +51,15 @@ def main():
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
+    parser.add_argument("--save_last", type=int, choices=[0, 1], default=1)
+    parser.add_argument("--save_weights_only", action="store_true")
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--mmap_mode", type=str, choices=["none", "r"], default="none")
     parser.add_argument("--probe_first_batch", action="store_true")
 
     args = parser.parse_args()
 
+    save_last = bool(args.save_last)
     mmap_mode = None if args.mmap_mode == "none" else args.mmap_mode
 
     train_dataset = NpyPuzzleDataset(args.data_dir, split='train', mmap_mode=mmap_mode)
@@ -117,9 +120,16 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join(args.default_root_dir, "checkpoints"),
         filename="epoch{epoch:03d}-step{step}",
-        save_last=True,
+        save_last=save_last,
         save_top_k=-1,
         every_n_epochs=args.save_every_n_epochs,
+        save_weights_only=args.save_weights_only,
+    )
+
+    print(
+        f"[startup] checkpoint: every_n_epochs={args.save_every_n_epochs}, "
+        f"save_last={save_last}, save_weights_only={args.save_weights_only}",
+        flush=True,
     )
 
     trainer = pl.Trainer(
@@ -132,7 +142,8 @@ def main():
     )
 
     trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
-    trainer.test(model, val_loader, ckpt_path="last")
+    test_ckpt_path = "last" if save_last else None
+    trainer.test(model, val_loader, ckpt_path=test_ckpt_path)
 
 
 if __name__ == "__main__":

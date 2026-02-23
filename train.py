@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from src.models import ACTPuzzleSolver
 
@@ -45,6 +46,9 @@ def main():
     parser.add_argument("--time_limit", type=int, default=20)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
+    parser.add_argument("--default_root_dir", type=str, default="runs")
+    parser.add_argument("--resume_ckpt", type=str, default=None)
+    parser.add_argument("--save_every_n_epochs", type=int, default=1)
     
     args = parser.parse_args()
 
@@ -85,15 +89,25 @@ def main():
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
     )
 
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join(args.default_root_dir, "checkpoints"),
+        filename="epoch{epoch:03d}-step{step}",
+        save_last=True,
+        save_top_k=-1,
+        every_n_epochs=args.save_every_n_epochs,
+    )
+
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
         accelerator="auto",
         devices=1,
-        log_every_n_steps=10
+        log_every_n_steps=10,
+        default_root_dir=args.default_root_dir,
+        callbacks=[checkpoint_callback],
     )
 
-    trainer.fit(model, train_loader)
-    trainer.test(model, val_loader)
+    trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
+    trainer.test(model, val_loader, ckpt_path="last")
 
 if __name__ == "__main__":
     main()

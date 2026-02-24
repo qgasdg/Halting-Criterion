@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from typing import Dict, Tuple
+import math
 
 class AdaptiveRNNCell(nn.Module):
     """
@@ -149,8 +150,12 @@ class ACTPuzzleSolver(pl.LightningModule):
         seq_len: int,
         hidden_size: int = 256,
         time_penalty: float = 0.001,
+        time_penalty_start: float = 0.0,
+        time_penalty_warmup_steps: int = 0,
         time_limit: int = 20,
         learning_rate: float = 1e-3,
+        weight_decay: float = 0.0,
+        lr_warmup_steps: int = 0,
         task_name: str = "sudoku",
         focus_token_id: int = -1,
     ):
@@ -175,6 +180,16 @@ class ACTPuzzleSolver(pl.LightningModule):
 
         self.task_name = task_name
         self.focus_token_id = focus_token_id if focus_token_id >= 0 else None
+        self.target_time_penalty = time_penalty
+        self.time_penalty_start = time_penalty_start
+        self.time_penalty_warmup_steps = max(0, int(time_penalty_warmup_steps))
+
+    def _compute_current_time_penalty(self) -> float:
+        if self.time_penalty_warmup_steps <= 0:
+            return float(self.target_time_penalty)
+
+        progress = min(1.0, float(self.global_step) / float(self.time_penalty_warmup_steps))
+        return float(self.time_penalty_start + (self.target_time_penalty - self.time_penalty_start) * progress)
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -190,6 +205,8 @@ class ACTPuzzleSolver(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y = batch
+        current_time_penalty = self._compute_current_time_penalty()
+        self.cell.time_penalty = current_time_penalty
         logits, ponder_cost, steps, act_stats = self.forward(x)
         
         # Loss 계산
@@ -217,6 +234,7 @@ class ACTPuzzleSolver(pl.LightningModule):
             self.log('focus_recall', focus_metrics['recall'], prog_bar=False)
             self.log('focus_f1', focus_metrics['f1'], prog_bar=True)
         self.log('steps', steps.float().mean(), prog_bar=True)
+        self.log('time_penalty_current', current_time_penalty, prog_bar=False)
         self.log('steps_p50', act_stats['steps_p50'], prog_bar=False)
         self.log('steps_p90', act_stats['steps_p90'], prog_bar=False)
         self.log('remainder_mean', act_stats['remainder_mean'], prog_bar=False)
@@ -230,6 +248,7 @@ class ACTPuzzleSolver(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         x, y = batch
+        self.cell.time_penalty = float(self.target_time_penalty)
         logits, _, steps, act_stats = self.forward(x)
         preds = torch.argmax(logits, dim=-1)
         
@@ -253,7 +272,34 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.log('test_halt_forced_ratio', act_stats['forced_halt_ratio'])
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay,
+        )
+
+        total_steps = int(getattr(self.trainer, "estimated_stepping_batches", 0) or 0)
+        warmup_steps = int(self.hparams.lr_warmup_steps)
+        if total_steps <= 0:
+            return optimizer
+
+        def lr_lambda(current_step: int) -> float:
+            if warmup_steps > 0 and current_step < warmup_steps:
+                return max(1e-8, float(current_step + 1) / float(warmup_steps))
+
+            decay_steps = max(1, total_steps - warmup_steps)
+            progress = min(1.0, max(0.0, (current_step - warmup_steps) / decay_steps))
+            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
 
     def _compute_focus_metrics(self, preds: torch.Tensor, y: torch.Tensor):
         # focus_token_id가 설정되면, 해당 토큰(예: Maze 경로 토큰 "o")만 대상으로

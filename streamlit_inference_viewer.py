@@ -72,9 +72,52 @@ def decode_grid(arr_1d: np.ndarray, task: str) -> list[list[str]]:
     return [[chars[v] if 0 <= v < len(chars) else "?" for v in row] for row in grid]
 
 
-def render_grid(title: str, grid: list[list[str]]):
+def _cell_display(char: str) -> str:
+    if char == "#":
+        return "█"
+    if char == " ":
+        return "&nbsp;"
+    return char
+
+
+def render_grid(title: str, grid: list[list[str]], *, key: str):
     st.markdown(f"**{title}**")
-    st.table(grid)
+
+    cell_size_px = 18
+    rows = len(grid)
+    cols = len(grid[0]) if rows > 0 else 0
+    html_cells = "".join(
+        f"<div class='maze-cell'>{_cell_display(c)}</div>" for row in grid for c in row
+    )
+    st.markdown(
+        f"""
+        <style>
+            .maze-grid-{key} {{
+                display: grid;
+                grid-template-columns: repeat({cols}, {cell_size_px}px);
+                grid-template-rows: repeat({rows}, {cell_size_px}px);
+                gap: 1px;
+                width: fit-content;
+                padding: 4px;
+                border: 1px solid #d9d9d9;
+                background: #d9d9d9;
+            }}
+            .maze-grid-{key} .maze-cell {{
+                width: {cell_size_px}px;
+                height: {cell_size_px}px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: white;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                font-size: 12px;
+                line-height: 1;
+            }}
+        </style>
+        <div class='maze-grid-{key}'>{html_cells}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 with st.sidebar:
@@ -129,11 +172,11 @@ all_correct = bool((pred == y).all())
 
 left, mid, right = st.columns(3)
 with left:
-    render_grid("입력", input_grid)
+    render_grid("입력", input_grid, key="input")
 with mid:
-    render_grid("정답", label_grid)
+    render_grid("정답", label_grid, key="label")
 with right:
-    render_grid("예측", pred_grid)
+    render_grid("예측", pred_grid, key="pred")
 
 st.metric("셀 정확도", f"{acc:.4f}")
 st.metric("퍼즐 완전 정답", "✅" if all_correct else "❌")

@@ -69,6 +69,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --weight_decay 1.0 \
   --lr_warmup_epochs 5 \
   --log_every_n_steps 1 \
+  --lr_warmup_steps 1000 \
   --use_ema \
   --default_root_dir ${OUT_DIR} \
   --save_every_n_epochs 1 \
@@ -98,6 +99,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --weight_decay 1.0 \
   --lr_warmup_epochs 5 \
   --log_every_n_steps 1 \
+  --lr_warmup_steps 1000 \
   --use_ema \
   --default_root_dir ${OUT_DIR} \
   --resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt \

@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--time_limit", type=int, default=16)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1.0)
-    parser.add_argument("--lr_warmup_epochs", type=int, default=5)
+    parser.add_argument("--lr_warmup_steps", type=int, default=1000)
     parser.add_argument("--use_ema", action="store_true")
     parser.add_argument("--ema_decay", type=float, default=0.999)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
@@ -100,7 +100,7 @@ def main():
         time_limit=args.time_limit,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        lr_warmup_epochs=args.lr_warmup_epochs,
+        lr_warmup_steps=args.lr_warmup_steps,
         task_name=args.task,
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
     )
@@ -115,6 +115,9 @@ def main():
 
     callbacks = [checkpoint_callback]
     if args.use_ema:
+        def ema_avg_fn(averaged_param, current_param, _num_averaged):
+            return (args.ema_decay * averaged_param) + ((1.0 - args.ema_decay) * current_param)
+
         callbacks.append(
             StochasticWeightAveraging(
                 swa_lrs=args.learning_rate,

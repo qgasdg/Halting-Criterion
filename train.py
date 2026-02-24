@@ -7,6 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks import StochasticWeightAveraging
+from torch.optim.swa_utils import get_ema_avg_fn
 
 from src.models import ACTPuzzleSolver
 
@@ -57,6 +58,7 @@ def main():
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--log_every_n_steps", type=int, default=1)
     
     args = parser.parse_args()
 
@@ -121,7 +123,7 @@ def main():
                 swa_lrs=args.learning_rate,
                 annealing_epochs=1,
                 swa_epoch_start=0.0,
-                avg_fn=ema_avg_fn,
+                avg_fn=get_ema_avg_fn(args.ema_decay),
             )
         )
 
@@ -129,13 +131,13 @@ def main():
         max_epochs=args.max_epochs,
         accelerator="auto",
         devices=1,
-        log_every_n_steps=10,
+        log_every_n_steps=args.log_every_n_steps,
         default_root_dir=args.default_root_dir,
         callbacks=callbacks,
     )
 
     trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
-    trainer.test(model, val_loader, ckpt_path="last")
+    trainer.test(model, val_loader, ckpt_path="last", weights_only=False)
 
 if __name__ == "__main__":
     main()

@@ -40,8 +40,8 @@ class AdaptiveRNNCell(nn.Module):
         self.rnn_cell = nn.GRUCell(input_size + 1, hidden_size)
         
         self.halting_layer = nn.Linear(hidden_size, 1)
-        # Bias 양수 초기화: 초반에는 생각 적게 하고 쉬운 것부터 학습
-        self.halting_layer.bias.data.fill_(1.0)
+        # Bias 음수 초기화: 초반에는 더 많이 ponder하고 점차 줄여가도록 유도
+        self.halting_layer.bias.data.fill_(-1.0)
 
     def forward(self, input_tensor: torch.Tensor, hidden: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         batch_size = input_tensor.size(0)

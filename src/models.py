@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from typing import Dict, Tuple
-import math
 
 class AdaptiveRNNCell(nn.Module):
     """
@@ -155,7 +154,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         time_limit: int = 20,
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
-        lr_warmup_steps: int = 0,
+        lr_warmup_epochs: int = 0,
         task_name: str = "sudoku",
         focus_token_id: int = -1,
     ):
@@ -278,25 +277,46 @@ class ACTPuzzleSolver(pl.LightningModule):
             weight_decay=self.hparams.weight_decay,
         )
 
-        total_steps = int(getattr(self.trainer, "estimated_stepping_batches", 0) or 0)
-        warmup_steps = int(self.hparams.lr_warmup_steps)
-        if total_steps <= 0:
+        total_epochs = int(getattr(self.trainer, "max_epochs", 0) or 0)
+        warmup_epochs = max(0, int(self.hparams.lr_warmup_epochs))
+        if total_epochs <= 0:
             return optimizer
 
-        def lr_lambda(current_step: int) -> float:
-            if warmup_steps > 0 and current_step < warmup_steps:
-                return max(1e-8, float(current_step + 1) / float(warmup_steps))
+        if warmup_epochs <= 0:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, total_epochs),
+            )
+        elif warmup_epochs >= total_epochs:
+            scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=1e-8,
+                end_factor=1.0,
+                total_iters=max(1, total_epochs),
+            )
+        else:
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[
+                    torch.optim.lr_scheduler.LinearLR(
+                        optimizer,
+                        start_factor=1e-8,
+                        end_factor=1.0,
+                        total_iters=warmup_epochs,
+                    ),
+                    torch.optim.lr_scheduler.CosineAnnealingLR(
+                        optimizer,
+                        T_max=max(1, total_epochs - warmup_epochs),
+                    ),
+                ],
+                milestones=[warmup_epochs],
+            )
 
-            decay_steps = max(1, total_steps - warmup_steps)
-            progress = min(1.0, max(0.0, (current_step - warmup_steps) / decay_steps))
-            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
+                "interval": "epoch",
                 "frequency": 1,
             },
         }

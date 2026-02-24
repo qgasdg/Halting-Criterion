@@ -72,12 +72,27 @@ def decode_grid(arr_1d: np.ndarray, task: str) -> list[list[str]]:
     return [[chars[v] if 0 <= v < len(chars) else "?" for v in row] for row in grid]
 
 
-def _cell_display(char: str) -> str:
+def _cell_html(char: str) -> str:
+    class_name = "maze-cell"
+    content = ""
     if char == "#":
-        return "█"
-    if char == " ":
-        return "&nbsp;"
-    return char
+        class_name += " maze-wall"
+    elif char == "S":
+        class_name += " maze-start"
+        content = "S"
+    elif char == "G":
+        class_name += " maze-goal"
+        content = "G"
+    elif char == "o":
+        class_name += " maze-path"
+        content = "o"
+    elif char == "·":
+        content = "·"
+    elif char == "?":
+        content = "?"
+    else:
+        content = "&nbsp;"
+    return f"<div class='{class_name}'>{content}</div>"
 
 
 def render_grid(title: str, grid: list[list[str]], *, key: str):
@@ -86,9 +101,7 @@ def render_grid(title: str, grid: list[list[str]], *, key: str):
     cell_size_px = 18
     rows = len(grid)
     cols = len(grid[0]) if rows > 0 else 0
-    html_cells = "".join(
-        f"<div class='maze-cell'>{_cell_display(c)}</div>" for row in grid for c in row
-    )
+    html_cells = "".join(_cell_html(c) for row in grid for c in row)
     st.markdown(
         f"""
         <style>
@@ -108,10 +121,25 @@ def render_grid(title: str, grid: list[list[str]], *, key: str):
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                background: white;
+                background: #ffffff;
+                color: #1f2937;
                 font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
                 font-size: 12px;
+                font-weight: 600;
                 line-height: 1;
+            }}
+            .maze-grid-{key} .maze-wall {{
+                background: #2f3542;
+                color: transparent;
+            }}
+            .maze-grid-{key} .maze-start {{
+                color: #047857;
+            }}
+            .maze-grid-{key} .maze-goal {{
+                color: #b45309;
+            }}
+            .maze-grid-{key} .maze-path {{
+                color: #1d4ed8;
             }}
         </style>
         <div class='maze-grid-{key}'>{html_cells}</div>

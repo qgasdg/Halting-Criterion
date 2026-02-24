@@ -58,12 +58,17 @@ mkdir -p ${OUT_DIR}
 CUDA_VISIBLE_DEVICES=0 python train.py \
   --task maze \
   --data_dir data/maze-30x30-hard-1k \
-  --batch_size 64 \
+  --batch_size 128 \
   --max_epochs 1000 \
   --hidden_size 512 \
-  --time_limit 20 \
+  --time_limit 16 \
+  --time_penalty_start 0.0 \
+  --time_penalty_warmup_steps 5000 \
   --time_penalty 0.001 \
-  --learning_rate 1e-3 \
+  --learning_rate 1e-4 \
+  --weight_decay 1.0 \
+  --lr_warmup_steps 1000 \
+  --use_ema \
   --default_root_dir ${OUT_DIR} \
   --save_every_n_epochs 1 \
   2>&1 | tee ${OUT_DIR}/train.log
@@ -81,12 +86,17 @@ OUT_DIR=runs/${RUN_ID}
 CUDA_VISIBLE_DEVICES=0 python train.py \
   --task maze \
   --data_dir data/maze-30x30-hard-1k \
-  --batch_size 64 \
+  --batch_size 128 \
   --max_epochs 1000 \
   --hidden_size 512 \
-  --time_limit 20 \
+  --time_limit 16 \
+  --time_penalty_start 0.0 \
+  --time_penalty_warmup_steps 5000 \
   --time_penalty 0.001 \
-  --learning_rate 1e-3 \
+  --learning_rate 1e-4 \
+  --weight_decay 1.0 \
+  --lr_warmup_steps 1000 \
+  --use_ema \
   --default_root_dir ${OUT_DIR} \
   --resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt \
   2>&1 | tee -a ${OUT_DIR}/train.log
@@ -103,3 +113,15 @@ tail -n 100 ${OUT_DIR}/train.log
 
 ## 권장 팁
 - `timeout 4h`보다 Slurm walltime을 신뢰하고, 체크포인트로 복구하는 방식이 더 직관적입니다.
+
+## 7) TRM 비교를 위한 데이터 증강
+TRM Maze-Hard 설정과 맞추려면 학습 데이터를 8방향 dihedral 증강으로 전처리하는 것을 권장합니다.
+
+```bash
+python dataset/build_maze_dataset.py preprocess-data \
+  --output-dir data/maze-30x30-hard-1k-aug8 \
+  --subsample-size 1000 \
+  --aug
+```
+
+그리고 `train.py`의 `--data_dir`를 `data/maze-30x30-hard-1k-aug8`로 지정해 학습하세요.

@@ -6,6 +6,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import StochasticWeightAveraging
+from torch.optim.swa_utils import get_ema_avg_fn
 
 from src.models import ACTPuzzleSolver
 
@@ -43,13 +45,20 @@ def main():
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--time_penalty", type=float, default=0.001)
-    parser.add_argument("--time_limit", type=int, default=20)
-    parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--time_penalty_start", type=float, default=0.0)
+    parser.add_argument("--time_penalty_warmup_steps", type=int, default=0)
+    parser.add_argument("--time_limit", type=int, default=16)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=1.0)
+    parser.add_argument("--lr_warmup_epochs", type=int, default=5)
+    parser.add_argument("--use_ema", action="store_true")
+    parser.add_argument("--ema_decay", type=float, default=0.999)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--log_every_n_steps", type=int, default=1)
     
     args = parser.parse_args()
 
@@ -86,8 +95,12 @@ def main():
         seq_len=train_dataset.meta['seq_len'],
         hidden_size=args.hidden_size,
         time_penalty=args.time_penalty,
+        time_penalty_start=args.time_penalty_start,
+        time_penalty_warmup_steps=args.time_penalty_warmup_steps,
         time_limit=args.time_limit,
         learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        lr_warmup_epochs=args.lr_warmup_epochs,
         task_name=args.task,
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
     )
@@ -100,17 +113,28 @@ def main():
         every_n_epochs=args.save_every_n_epochs,
     )
 
+    callbacks = [checkpoint_callback]
+    if args.use_ema:
+        callbacks.append(
+            StochasticWeightAveraging(
+                swa_lrs=args.learning_rate,
+                annealing_epochs=1,
+                swa_epoch_start=0.0,
+                avg_fn=get_ema_avg_fn(args.ema_decay),
+            )
+        )
+
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
         accelerator="auto",
         devices=1,
-        log_every_n_steps=10,
+        log_every_n_steps=args.log_every_n_steps,
         default_root_dir=args.default_root_dir,
-        callbacks=[checkpoint_callback],
+        callbacks=callbacks,
     )
 
     trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
-    trainer.test(model, val_loader, ckpt_path="last")
+    trainer.test(model, val_loader, ckpt_path="last", weights_only=False)
 
 if __name__ == "__main__":
     main()

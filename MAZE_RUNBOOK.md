@@ -51,7 +51,7 @@ srun -p p1 \
 cd /path/to/Halting-Criterion
 source .venv/bin/activate
 mkdir -p runs
-RUN_ID=maze_a40_$(date +%Y%m%d_%H%M%S)
+RUN_ID=maze_$(date +%Y%m%d_%H%M%S)
 OUT_DIR=runs/${RUN_ID}
 mkdir -p ${OUT_DIR}
 

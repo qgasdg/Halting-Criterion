@@ -1,4 +1,5 @@
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,33 @@ st.set_page_config(page_title="Checkpoint Inference Viewer", layout="wide")
 st.title("🧩 Checkpoint Inference Viewer")
 st.caption("저장된 체크포인트로 테스트 샘플 1개를 추론해 입력/정답/예측을 비교합니다.")
 
+
+
+
+def load_model_from_checkpoint(ckpt_path: Path) -> ACTPuzzleSolver:
+    """Load checkpoint compatibly across torch/lightning versions.
+
+    - Forces `weights_only=False` for trusted checkpoints (PyTorch 2.6 default changed).
+    - Reconstructs model from saved hyper_parameters + state_dict.
+    - Backfills legacy hparams key `lr_warmup_steps` -> `lr_warmup_epochs`.
+    """
+    try:
+        checkpoint = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(str(ckpt_path), map_location="cpu")
+
+    hparams = dict(checkpoint.get("hyper_parameters", {}))
+    if "lr_warmup_steps" in hparams and "lr_warmup_epochs" not in hparams:
+        hparams["lr_warmup_epochs"] = hparams.pop("lr_warmup_steps")
+
+    model = ACTPuzzleSolver(**hparams)
+    state_dict = checkpoint.get("state_dict")
+    if state_dict is None:
+        raise KeyError("Checkpoint에 state_dict가 없습니다.")
+
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+    return model
 
 def load_dataset_split(data_dir: Path, split: str):
     split_dir = data_dir / split
@@ -71,8 +99,12 @@ if not (data_dir / split).exists():
     st.stop()
 
 with st.spinner("모델/데이터 로드 중..."):
-    model = ACTPuzzleSolver.load_from_checkpoint(str(ckpt_path), map_location="cpu")
-    model.eval()
+    try:
+        model = load_model_from_checkpoint(ckpt_path)
+    except pickle.UnpicklingError as e:
+        st.error("체크포인트 로딩 실패 (weights_only 관련). 신뢰 가능한 체크포인트라면 weights_only=False로 로드해야 합니다.")
+        st.exception(e)
+        st.stop()
 
     inputs, labels, meta = load_dataset_split(data_dir, split)
     if sample_index >= len(inputs):

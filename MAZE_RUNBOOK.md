@@ -1,11 +1,13 @@
-# Maze Training Runbook (ACT-RNN / Universal Transformer)
+# Maze Training Runbook + ACT Toy Tasks (Addition / Parity)
 
-이 문서는 현재 코드 구조(`src/cli.py`, `src/data.py`, `src/model_factory.py`, `train.py`)에 맞춘 **Maze 학습/재시작 표준 절차**입니다.
+이 문서는 현재 코드 구조(`src/cli.py`, `src/data.py`, `src/model_factory.py`, `train.py`)에 맞춘 **Maze 학습/재시작 표준 절차**와,
+새로 추가된 **ACT toy task(`tasks/addition.py`, `tasks/parity.py`) 실행 절차**를 함께 다룹니다.
 
 - 학습 진입점: `train.py` (조립 전용)
 - 인자 정의: `src/cli.py`
 - 데이터로더: `src/data.py`
 - 모델 생성 분기: `src/model_factory.py`
+- toy task 진입점: `tasks/addition.py`, `tasks/parity.py`
 
 ---
 
@@ -238,6 +240,72 @@ streamlit run streamlit_inference_viewer.py
 - 데이터셋 경로: `data/maze-30x30-hard-1k` (또는 증강 데이터 경로)
 
 체크포인트 내부 `hyper_parameters.model_type`에 따라 모델이 자동 선택됩니다.
+
+---
+
+## 9) ACT Toy Task 실행 (Addition / Parity)
+
+아래 두 스크립트는 Maze 파이프라인(`train.py`)과는 별개로, 개별 Lightning 학습 스크립트 형태입니다.
+
+- `tasks/addition.py`: 자리수 누적합 예측 (sequence-to-sequence classification)
+- `tasks/parity.py`: parity 분류 (binary classification)
+
+### 9-1) 공통 실행 전 확인
+
+```bash
+python -m compileall tasks/addition.py tasks/parity.py
+```
+
+필수 패키지(`torch`, `pytorch-lightning`)가 없는 경우 import 단계에서 실패할 수 있습니다.
+
+### 9-2) Addition 학습 예시
+
+```bash
+python tasks/addition.py \
+  --max_steps 200000 \
+  --sequence_length 5 \
+  --max_digits 5 \
+  --hidden_size 512 \
+  --time_penalty 0.001 \
+  --time_limit 20 \
+  --batch_size 32 \
+  --learning_rate 1e-4 \
+  --data_workers 1
+```
+
+주요 로그:
+- `train/loss_total`
+- `train/loss_classification`
+- `train/loss_ponder`
+- `train/accuracy_place`
+- `train/accuracy_sequence`
+
+### 9-3) Parity 학습 예시
+
+```bash
+python tasks/parity.py \
+  --max_steps 200000 \
+  --bits 16 \
+  --hidden_size 64 \
+  --time_penalty 0.001 \
+  --time_limit 20 \
+  --batch_size 32 \
+  --learning_rate 1e-4 \
+  --data_workers 1
+```
+
+주요 로그:
+- `train/loss_total`
+- `train/loss_classification`
+- `train/loss_ponder`
+- `train/accuracy`
+- `train/steps`
+
+### 9-4) 운영 주의사항
+
+- 두 toy task는 `train.py` 체크포인트/재시작 체계(`--default_root_dir`, `--resume_ckpt`)를 사용하지 않습니다.
+- 필요하면 `pl.Trainer(...)` 인자(`default_root_dir`, `enable_checkpointing`)를 스크립트 내부에서 명시해 체크포인트 정책을 고정하세요.
+- toy task는 검증/테스트 루프가 없는 최소 학습 루프이므로, 연구용 실험에서는 별도 validation 로직을 추가하는 것을 권장합니다.
 
 ---
 

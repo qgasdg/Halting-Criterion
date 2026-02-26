@@ -10,6 +10,7 @@ from pytorch_lightning.callbacks import StochasticWeightAveraging
 from torch.optim.swa_utils import get_ema_avg_fn
 
 from src.models import ACTPuzzleSolver
+from src.universal_transformer import UniversalTransformerPuzzleSolver
 
 # Maze 데이터셋(`dataset/build_maze_dataset.py`)의 문자 집합.
 # 인코딩 규칙은 PAD=0, 그리고 CHARSET의 순서대로 1부터 할당된다.
@@ -54,11 +55,20 @@ def main():
     parser.add_argument("--use_ema", action="store_true")
     parser.add_argument("--ema_decay", type=float, default=0.999)
     parser.add_argument("--task", type=str, default="sudoku", choices=["sudoku", "maze"])
+    parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--log_every_n_steps", type=int, default=1)
+    parser.add_argument("--ut_embedding_size", type=int, default=64)
+    parser.add_argument("--ut_heads", type=int, default=4)
+    parser.add_argument("--ut_key_depth", type=int, default=256)
+    parser.add_argument("--ut_value_depth", type=int, default=256)
+    parser.add_argument("--ut_filter_size", type=int, default=256)
+    parser.add_argument("--ut_max_hops", type=int, default=6)
+    parser.add_argument("--ut_act", action="store_true")
+    parser.add_argument("--ut_act_loss_weight", type=float, default=0.001)
     
     args = parser.parse_args()
 
@@ -90,20 +100,39 @@ def main():
         # build_maze_dataset.py와 동일한 규칙(PAD=0, CHARSET 1-indexed)으로 계산한다.
         focus_token_id = MAZE_CHARSET.index("o") + 1
 
-    model = ACTPuzzleSolver(
+    common_model_kwargs = dict(
         vocab_size=train_dataset.meta['vocab_size'],
         seq_len=train_dataset.meta['seq_len'],
-        hidden_size=args.hidden_size,
-        time_penalty=args.time_penalty,
-        time_penalty_start=args.time_penalty_start,
-        time_penalty_warmup_steps=args.time_penalty_warmup_steps,
-        time_limit=args.time_limit,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         lr_warmup_epochs=args.lr_warmup_epochs,
         task_name=args.task,
         focus_token_id=focus_token_id if focus_token_id is not None else -1,
+        model_type=args.model_type,
     )
+
+    if args.model_type == "universal_transformer":
+        model = UniversalTransformerPuzzleSolver(
+            embedding_size=args.ut_embedding_size,
+            hidden_size=args.hidden_size,
+            num_heads=args.ut_heads,
+            total_key_depth=args.ut_key_depth,
+            total_value_depth=args.ut_value_depth,
+            filter_size=args.ut_filter_size,
+            max_hops=args.ut_max_hops,
+            ut_act=args.ut_act,
+            act_loss_weight=args.ut_act_loss_weight,
+            **common_model_kwargs,
+        )
+    else:
+        model = ACTPuzzleSolver(
+            hidden_size=args.hidden_size,
+            time_penalty=args.time_penalty,
+            time_penalty_start=args.time_penalty_start,
+            time_penalty_warmup_steps=args.time_penalty_warmup_steps,
+            time_limit=args.time_limit,
+            **common_model_kwargs,
+        )
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join(args.default_root_dir, "checkpoints"),

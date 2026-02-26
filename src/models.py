@@ -157,6 +157,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         lr_warmup_epochs: int = 0,
         task_name: str = "sudoku",
         focus_token_id: int = -1,
+        model_type: str = "act_rnn",
     ):
         super().__init__()
         self.save_hyperparameters()

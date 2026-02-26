@@ -1,52 +1,83 @@
-# Maze 4-hour Runbook
+# Maze Training Runbook (ACT-RNN / Universal Transformer)
 
-## 왜 안전장치가 필요한가?
-Slurm `--time=04:00:00`이 끝나면 프로세스는 종료됩니다.
-학습 상태를 이어가려면 **주기적 체크포인트 저장 + 재시작 커맨드**를 반드시 준비하는 게 맞습니다.
+이 문서는 현재 코드 구조(`src/cli.py`, `src/data.py`, `src/model_factory.py`, `train.py`)에 맞춘 **Maze 학습/재시작 표준 절차**입니다.
 
-이 저장소는 `train.py`에 아래 옵션을 추가해 두었습니다.
-- `--default_root_dir`: 로그/체크포인트 저장 루트
-- `--resume_ckpt`: 이전 체크포인트에서 재시작
-- `--save_every_n_epochs`: 에폭 주기 저장
+- 학습 진입점: `train.py` (조립 전용)
+- 인자 정의: `src/cli.py`
+- 데이터로더: `src/data.py`
+- 모델 생성 분기: `src/model_factory.py`
 
-또한 `trainer.test(...)`는 마지막 체크포인트(`last`) 기준으로 실행됩니다.
+---
+
+## 0) 핵심 변경점 요약
+
+최근 리팩터링으로 아래가 달라졌습니다.
+
+1. `train.py`는 최대한 얇고, 옵션/데이터/모델 로직이 모듈로 분리됨.
+2. `--model_type`으로 모델 선택:
+   - `act_rnn` (기본)
+   - `universal_transformer`
+3. UT(Universal Transformer) 전용 옵션은 `--ut_*` prefix로 분리됨.
+4. 체크포인트 하이퍼파라미터에 `model_type`이 저장되어, 추론 로더가 모델 클래스를 자동 선택 가능.
 
 ---
 
 ## 1) 환경 준비
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install torch pytorch-lightning numpy
+pip install torch pytorch-lightning numpy streamlit
 ```
 
-## 2) 데이터 준비 (이미 있으면 생략)
-`data/maze-30x30-hard-1k/{train,test}` 하위에 아래 파일이 있어야 함:
+> 클러스터/서버 환경이면 CUDA 버전에 맞는 torch 설치 명령을 사용하세요.
+
+---
+
+## 2) 데이터 준비
+
+`data/maze-30x30-hard-1k/{train,test}` 하위에 다음 파일이 있어야 합니다.
+
 - `all__inputs.npy`
 - `all__labels.npy`
 - `dataset.json`
 
+### (선택) TRM 비교용 8방향 증강 데이터 생성
+
+```bash
+python dataset/build_maze_dataset.py preprocess-data \
+  --output-dir data/maze-30x30-hard-1k-aug8 \
+  --subsample-size 1000 \
+  --aug
+```
+
+---
+
 ## 3) GPU 확인
+
 ```bash
 nvidia-smi
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"
 ```
 
-## 4) Slurm 인터랙티브 실행 (4시간)
-질문에서 사용한 방식 그대로 실행:
+---
+
+## 4) Slurm 인터랙티브 세션 (4시간 예시)
+
 ```bash
 srun -p p1 \
      --gres=gpu:a40:1 \
      --cpus-per-task=4 \
      --time=04:00:00 \
-     -J act1 \
+     -J maze_train \
      --mail-type=END,FAIL \
-     --mail-user=dx0802@inha.edu \
+     --mail-user=<YOUR_EMAIL> \
      --pty bash
 ```
 
-할당 노드 안에서 실행:
+세션 내부:
+
 ```bash
 cd /path/to/Halting-Criterion
 source .venv/bin/activate
@@ -54,9 +85,18 @@ mkdir -p runs
 RUN_ID=maze_$(date +%Y%m%d_%H%M%S)
 OUT_DIR=runs/${RUN_ID}
 mkdir -p ${OUT_DIR}
+```
 
+---
+
+## 5) 학습 실행 템플릿
+
+## 5-1) ACT-RNN (기본)
+
+```bash
 CUDA_VISIBLE_DEVICES=0 python train.py \
   --task maze \
+  --model_type act_rnn \
   --data_dir data/maze-30x30-hard-1k \
   --batch_size 128 \
   --max_epochs 1000 \
@@ -75,17 +115,54 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   2>&1 | tee ${OUT_DIR}/train.log
 ```
 
-## 5) 시간 만료 후 재시작
-다음 allocation을 다시 받은 뒤, **last.ckpt**에서 이어서 학습:
+## 5-2) Universal Transformer
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python train.py \
+  --task maze \
+  --model_type universal_transformer \
+  --data_dir data/maze-30x30-hard-1k \
+  --batch_size 128 \
+  --max_epochs 1000 \
+  --hidden_size 512 \
+  --ut_embedding_size 64 \
+  --ut_heads 4 \
+  --ut_key_depth 256 \
+  --ut_value_depth 256 \
+  --ut_filter_size 256 \
+  --ut_max_hops 6 \
+  --ut_act \
+  --ut_act_loss_weight 0.001 \
+  --learning_rate 1e-4 \
+  --weight_decay 1.0 \
+  --lr_warmup_epochs 5 \
+  --log_every_n_steps 1 \
+  --use_ema \
+  --default_root_dir ${OUT_DIR} \
+  --save_every_n_epochs 1 \
+  2>&1 | tee ${OUT_DIR}/train.log
+```
+
+---
+
+## 6) 시간 만료 후 재시작
+
+새 allocation을 받은 뒤 기존 `RUN_ID`를 그대로 사용합니다.
+
 ```bash
 cd /path/to/Halting-Criterion
 source .venv/bin/activate
 
-RUN_ID=<이전에 쓰던 run id>
+RUN_ID=<기존 run id>
 OUT_DIR=runs/${RUN_ID}
+```
 
+### ACT-RNN 재시작 예시
+
+```bash
 CUDA_VISIBLE_DEVICES=0 python train.py \
   --task maze \
+  --model_type act_rnn \
   --data_dir data/maze-30x30-hard-1k \
   --batch_size 128 \
   --max_epochs 1000 \
@@ -104,26 +181,68 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   2>&1 | tee -a ${OUT_DIR}/train.log
 ```
 
-## 6) 체크포인트/로그 확인
-```bash
-ls -lh ${OUT_DIR}/checkpoints
+### Universal Transformer 재시작 예시
 
-tail -n 100 ${OUT_DIR}/train.log
+> 재시작 시에도 **동일한 `model_type`/주요 구조 하이퍼파라미터**를 유지하세요.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python train.py \
+  --task maze \
+  --model_type universal_transformer \
+  --data_dir data/maze-30x30-hard-1k \
+  --batch_size 128 \
+  --max_epochs 1000 \
+  --hidden_size 512 \
+  --ut_embedding_size 64 \
+  --ut_heads 4 \
+  --ut_key_depth 256 \
+  --ut_value_depth 256 \
+  --ut_filter_size 256 \
+  --ut_max_hops 6 \
+  --ut_act \
+  --ut_act_loss_weight 0.001 \
+  --learning_rate 1e-4 \
+  --weight_decay 1.0 \
+  --lr_warmup_epochs 5 \
+  --log_every_n_steps 1 \
+  --use_ema \
+  --default_root_dir ${OUT_DIR} \
+  --resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt \
+  2>&1 | tee -a ${OUT_DIR}/train.log
 ```
 
 ---
 
-## 권장 팁
-- `timeout 4h`보다 Slurm walltime을 신뢰하고, 체크포인트로 복구하는 방식이 더 직관적입니다.
-
-## 7) TRM 비교를 위한 데이터 증강
-TRM Maze-Hard 설정과 맞추려면 학습 데이터를 8방향 dihedral 증강으로 전처리하는 것을 권장합니다.
+## 7) 산출물 점검
 
 ```bash
-python dataset/build_maze_dataset.py preprocess-data \
-  --output-dir data/maze-30x30-hard-1k-aug8 \
-  --subsample-size 1000 \
-  --aug
+ls -lh ${OUT_DIR}/checkpoints
+tail -n 100 ${OUT_DIR}/train.log
 ```
 
-그리고 `train.py`의 `--data_dir`를 `data/maze-30x30-hard-1k-aug8`로 지정해 학습하세요.
+확인 포인트:
+- `last.ckpt` 존재 여부
+- 로그에 `model_type`에 맞는 지표가 정상 출력되는지
+- OOM/NaN/학습 정체 여부
+
+---
+
+## 8) 체크포인트 추론(뷰어)
+
+```bash
+streamlit run streamlit_inference_viewer.py
+```
+
+사이드바에서:
+- 체크포인트 경로: `${OUT_DIR}/checkpoints/last.ckpt`
+- 데이터셋 경로: `data/maze-30x30-hard-1k` (또는 증강 데이터 경로)
+
+체크포인트 내부 `hyper_parameters.model_type`에 따라 모델이 자동 선택됩니다.
+
+---
+
+## 운영 팁
+
+- Slurm walltime 기반으로 운영하고, `--save_every_n_epochs 1` + `last.ckpt` 재시작 전략을 기본값으로 두세요.
+- 튜닝은 한 번에 하나씩만 바꾸세요(`--time_limit` 또는 `--ut_max_hops` 등).
+- 모델 비교 시 동일 데이터/배치/epoch/seed 조건으로 맞추고 `RUN_ID` 규칙을 통일하세요.

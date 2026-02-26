@@ -7,6 +7,7 @@ import streamlit as st
 import torch
 
 from src.models import ACTPuzzleSolver
+from src.universal_transformer import UniversalTransformerPuzzleSolver
 
 MAZE_CHARSET = "# SGo"
 
@@ -17,7 +18,7 @@ st.caption("저장된 체크포인트로 테스트 샘플 1개를 추론해 입�
 
 
 
-def load_model_from_checkpoint(ckpt_path: Path) -> ACTPuzzleSolver:
+def load_model_from_checkpoint(ckpt_path: Path):
     """Load checkpoint compatibly across torch/lightning versions.
 
     - Forces `weights_only=False` for trusted checkpoints (PyTorch 2.6 default changed).
@@ -33,7 +34,11 @@ def load_model_from_checkpoint(ckpt_path: Path) -> ACTPuzzleSolver:
     if "lr_warmup_steps" in hparams and "lr_warmup_epochs" not in hparams:
         hparams["lr_warmup_epochs"] = hparams.pop("lr_warmup_steps")
 
-    model = ACTPuzzleSolver(**hparams)
+    model_type = hparams.get("model_type", "act_rnn")
+    if model_type == "universal_transformer":
+        model = UniversalTransformerPuzzleSolver(**hparams)
+    else:
+        model = ACTPuzzleSolver(**hparams)
     state_dict = checkpoint.get("state_dict")
     if state_dict is None:
         raise KeyError("Checkpoint에 state_dict가 없습니다.")
@@ -50,7 +55,7 @@ def load_dataset_split(data_dir: Path, split: str):
     return inputs, labels, meta
 
 
-def infer_task(meta: dict, model: ACTPuzzleSolver) -> str:
+def infer_task(meta: dict, model) -> str:
     task_name = getattr(model, "task_name", None)
     if task_name in {"maze", "sudoku"}:
         return task_name

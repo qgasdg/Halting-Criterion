@@ -11,6 +11,7 @@ from typing import List, Tuple
 
 import pytorch_lightning as pl
 import torch
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from src.models import AdaptiveRNNCell
 
@@ -118,15 +119,17 @@ class AdditionModel(pl.LightningModule):
         )
         self.output_layer = torch.nn.Linear(hidden_size, self.dataset.target_size * AdditionDataset.NUM_CLASSES)
 
-    def forward(self, number_sequence: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, number_sequence: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         hidden = None
         hidden_seq = []
         ponder_costs = []
+        step_counts = []
 
         for step in range(number_sequence.size(0)):
-            hidden, step_ponder, _, _ = self.rnn_cell(number_sequence[step], hidden)
+            hidden, step_ponder, step_count, _ = self.rnn_cell(number_sequence[step], hidden)
             hidden_seq.append(hidden)
             ponder_costs.append(step_ponder)
+            step_counts.append(step_count.float())
 
         hidden_stacked = torch.stack(hidden_seq, dim=0)
         logits = self.output_layer(hidden_stacked)
@@ -136,11 +139,11 @@ class AdditionModel(pl.LightningModule):
             self.dataset.target_size,
             AdditionDataset.NUM_CLASSES,
         )
-        return logits, torch.stack(ponder_costs).mean()
+        return logits, torch.stack(ponder_costs).mean(), torch.stack(step_counts).mean()
 
     def training_step(self, batch, _):
         numbers, sums = batch
-        logits, ponder_cost = self(numbers)
+        logits, ponder_cost, mean_steps = self(numbers)
 
         cls_loss = torch.nn.functional.cross_entropy(
             logits.view(-1, AdditionDataset.NUM_CLASSES),
@@ -159,6 +162,7 @@ class AdditionModel(pl.LightningModule):
                 "train/loss_total": loss,
                 "train/loss_classification": cls_loss,
                 "train/loss_ponder": ponder_cost,
+                "train/ponder_steps": mean_steps,
                 "train/accuracy_place": place_accuracy,
                 "train/accuracy_sequence": sequence_accuracy,
             },
@@ -190,6 +194,9 @@ def main() -> None:
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--time_limit", type=int, default=20)
     parser.add_argument("--data_workers", type=int, default=1)
+    parser.add_argument("--default_root_dir", type=str, default="runs")
+    parser.add_argument("--resume_ckpt", type=str, default=None)
+    parser.add_argument("--save_every_n_epochs", type=int, default=1)
     args = parser.parse_args()
 
     model = AdditionModel(
@@ -202,8 +209,21 @@ def main() -> None:
         time_limit=args.time_limit,
         data_workers=args.data_workers,
     )
-    trainer = pl.Trainer(max_steps=args.max_steps, accelerator="auto", devices=1)
-    trainer.fit(model)
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=f"{args.default_root_dir}/checkpoints",
+        filename="step{step}",
+        save_last=True,
+        save_top_k=-1,
+        every_n_epochs=args.save_every_n_epochs,
+    )
+    trainer = pl.Trainer(
+        max_steps=args.max_steps,
+        accelerator="auto",
+        devices=1,
+        default_root_dir=args.default_root_dir,
+        callbacks=[checkpoint_callback],
+    )
+    trainer.fit(model, ckpt_path=args.resume_ckpt)
 
 
 if __name__ == "__main__":

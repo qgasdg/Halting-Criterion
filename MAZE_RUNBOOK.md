@@ -114,7 +114,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --use_ema \
   --default_root_dir ${OUT_DIR} \
   --save_every_n_epochs 1 \
-  2>&1 | tee ${OUT_DIR}/train.log
+
 ```
 
 ## 5-2) Universal Transformer
@@ -142,7 +142,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --use_ema \
   --default_root_dir ${OUT_DIR} \
   --save_every_n_epochs 1 \
-  2>&1 | tee ${OUT_DIR}/train.log
+
 ```
 
 ---
@@ -180,7 +180,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --use_ema \
   --default_root_dir ${OUT_DIR} \
   --resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt \
-  2>&1 | tee -a ${OUT_DIR}/train.log
+
 ```
 
 ### Universal Transformer 재시작 예시
@@ -210,7 +210,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --use_ema \
   --default_root_dir ${OUT_DIR} \
   --resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt \
-  2>&1 | tee -a ${OUT_DIR}/train.log
+
 ```
 
 ---
@@ -258,7 +258,49 @@ python -m compileall tasks/addition.py tasks/parity.py
 
 필수 패키지(`torch`, `pytorch-lightning`)가 없는 경우 import 단계에서 실패할 수 있습니다.
 
-### 9-2) Addition 학습 예시
+### 9-2) 출력 경로(OUT_DIR) 설정
+
+Maze 학습과 동일하게 run id를 만들고 `--default_root_dir`로 전달합니다.
+
+```bash
+mkdir -p runs
+RUN_ID=toy_$(date +%Y%m%d_%H%M%S)
+OUT_DIR=runs/${RUN_ID}
+mkdir -p ${OUT_DIR}
+```
+
+재시작 시에는 동일한 `OUT_DIR`를 사용하고 `--resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt`를 지정합니다.
+
+### 9-3) 스모크 테스트 (CLI)
+
+```bash
+python tasks/addition.py \
+  --max_steps 5 \
+  --sequence_length 5 \
+  --max_digits 5 \
+  --hidden_size 64 \
+  --time_penalty 0.001 \
+  --time_limit 10 \
+  --batch_size 2 \
+  --learning_rate 1e-4 \
+  --data_workers 0 \
+  --default_root_dir ${OUT_DIR}
+
+python tasks/parity.py \
+  --max_steps 5 \
+  --bits 16 \
+  --hidden_size 64 \
+  --time_penalty 0.001 \
+  --time_limit 10 \
+  --batch_size 2 \
+  --learning_rate 1e-4 \
+  --data_workers 0 \
+  --default_root_dir ${OUT_DIR}
+```
+
+짧은 step으로 실행 성공 여부와 로깅 키(`train/loss_*`, `train/ponder_steps`)를 빠르게 확인합니다.
+
+### 9-4) Addition 학습 예시
 
 ```bash
 python tasks/addition.py \
@@ -270,7 +312,8 @@ python tasks/addition.py \
   --time_limit 20 \
   --batch_size 32 \
   --learning_rate 1e-4 \
-  --data_workers 1
+  --data_workers 1 \
+  --default_root_dir ${OUT_DIR}
 ```
 
 주요 로그:
@@ -280,7 +323,7 @@ python tasks/addition.py \
 - `train/accuracy_place`
 - `train/accuracy_sequence`
 
-### 9-3) Parity 학습 예시
+### 9-5) Parity 학습 예시
 
 ```bash
 python tasks/parity.py \
@@ -291,7 +334,8 @@ python tasks/parity.py \
   --time_limit 20 \
   --batch_size 32 \
   --learning_rate 1e-4 \
-  --data_workers 1
+  --data_workers 1 \
+  --default_root_dir ${OUT_DIR}
 ```
 
 주요 로그:
@@ -301,9 +345,28 @@ python tasks/parity.py \
 - `train/accuracy`
 - `train/steps`
 
-### 9-4) 운영 주의사항
+### 9-6) Toy Task 재시작 예시
 
-- 두 toy task는 `train.py` 체크포인트/재시작 체계(`--default_root_dir`, `--resume_ckpt`)를 사용하지 않습니다.
+```bash
+python tasks/addition.py \
+  --max_steps 200000 \
+  --sequence_length 5 \
+  --max_digits 5 \
+  --hidden_size 512 \
+  --time_penalty 0.001 \
+  --time_limit 20 \
+  --batch_size 32 \
+  --learning_rate 1e-4 \
+  --data_workers 1 \
+  --default_root_dir ${OUT_DIR} \
+  --resume_ckpt ${OUT_DIR}/checkpoints/last.ckpt
+```
+
+`tasks/parity.py`도 동일하게 `--default_root_dir` + `--resume_ckpt` 조합으로 재시작할 수 있습니다.
+
+### 9-7) 운영 주의사항
+
+- 두 toy task 모두 `--default_root_dir` / `--resume_ckpt`를 지원하므로 Maze와 같은 방식으로 경로 운영이 가능합니다.
 - 필요하면 `pl.Trainer(...)` 인자(`default_root_dir`, `enable_checkpointing`)를 스크립트 내부에서 명시해 체크포인트 정책을 고정하세요.
 - toy task는 검증/테스트 루프가 없는 최소 학습 루프이므로, 연구용 실험에서는 별도 validation 로직을 추가하는 것을 권장합니다.
 

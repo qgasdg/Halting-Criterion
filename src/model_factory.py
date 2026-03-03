@@ -30,6 +30,11 @@ def build_model(args, meta, focus_token_id):
             ut_key_depth=args.ut_key_depth,
             ut_value_depth=args.ut_value_depth,
             ut_filter_size=args.ut_filter_size,
+            val_size=args.toy_val_size,
+            test_size=args.toy_test_size,
+            eval_seed=args.toy_eval_seed,
+            near_ood_bits=args.parity_near_ood_bits,
+            ood_bits=args.parity_ood_bits,
         )
 
     if args.task == "addition":
@@ -50,6 +55,13 @@ def build_model(args, meta, focus_token_id):
             ut_key_depth=args.ut_key_depth,
             ut_value_depth=args.ut_value_depth,
             ut_filter_size=args.ut_filter_size,
+            val_size=args.toy_val_size,
+            test_size=args.toy_test_size,
+            eval_seed=args.toy_eval_seed,
+            near_ood_sequence_length=args.addition_near_ood_sequence_length,
+            ood_sequence_length=args.addition_ood_sequence_length,
+            near_ood_max_digits=args.addition_near_ood_max_digits,
+            ood_max_digits=args.addition_ood_max_digits,
         )
 
     common_model_kwargs = dict(

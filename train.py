@@ -42,7 +42,7 @@ def main():
     else:
         if args.data_dir is None:
             raise ValueError("--data_dir is required for sudoku/maze tasks.")
-        train_dataset, train_loader, val_loader = create_dataloaders(
+        train_dataset, train_loader, val_loader, test_loader = create_dataloaders(
             data_dir=args.data_dir,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
@@ -82,6 +82,7 @@ def main():
             logger=loggers,
         )
         trainer.fit(model, ckpt_path=args.resume_ckpt)
+        trainer.test(model, ckpt_path="last", weights_only=False)
     else:
         trainer = pl.Trainer(
             max_epochs=args.max_epochs,
@@ -93,8 +94,8 @@ def main():
             logger=loggers,
         )
 
-        trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
-        trainer.test(model, val_loader, ckpt_path="last", weights_only=False)
+        trainer.fit(model, train_loader, val_loader, ckpt_path=args.resume_ckpt)
+        trainer.test(model, test_loader, ckpt_path="last", weights_only=False)
 
 
 if __name__ == "__main__":

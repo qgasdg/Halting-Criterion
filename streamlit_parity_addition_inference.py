@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 import torch
 
+from src.dev_utils import load_torch_checkpoint
 from tasks.addition import AdditionDataset, AdditionModel
 from tasks.parity import ParityModel
 
@@ -14,10 +15,7 @@ st.caption("체크포인트로 in-distribution 길이와 out-of-distribution 길
 
 
 def load_checkpoint(ckpt_path: Path, task: str):
-    try:
-        checkpoint = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-    except TypeError:
-        checkpoint = torch.load(str(ckpt_path), map_location="cpu")
+    checkpoint = load_torch_checkpoint(ckpt_path)
 
     hparams = dict(checkpoint.get("hyper_parameters", {}))
     state_dict = checkpoint.get("state_dict")

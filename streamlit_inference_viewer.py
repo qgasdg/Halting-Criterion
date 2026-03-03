@@ -6,6 +6,7 @@ import numpy as np
 import streamlit as st
 import torch
 
+from src.dev_utils import load_torch_checkpoint
 from src.models import ACTPuzzleSolver
 from src.universal_transformer import UniversalTransformerPuzzleSolver
 
@@ -25,10 +26,7 @@ def load_model_from_checkpoint(ckpt_path: Path):
     - Reconstructs model from saved hyper_parameters + state_dict.
     - Backfills legacy hparams key `lr_warmup_steps` -> `lr_warmup_epochs`.
     """
-    try:
-        checkpoint = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-    except TypeError:
-        checkpoint = torch.load(str(ckpt_path), map_location="cpu")
+    checkpoint = load_torch_checkpoint(ckpt_path)
 
     hparams = dict(checkpoint.get("hyper_parameters", {}))
     if "lr_warmup_steps" in hparams and "lr_warmup_epochs" not in hparams:

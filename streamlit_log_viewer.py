@@ -1,30 +1,18 @@
-import glob
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from src.dev_utils import discover_metric_files
+
 st.set_page_config(page_title="Training Log Viewer", layout="wide")
 st.title("📈 Training Log Viewer")
 st.caption("PyTorch Lightning metrics.csv를 선택해 지표를 인터랙티브하게 확인합니다.")
 
-
-def discover_metric_files(root: Path) -> list[Path]:
-    patterns = [
-        str(root / "**/metrics.csv"),
-        str(root / "**/*.csv"),
-    ]
-    files: list[Path] = []
-    for pattern in patterns:
-        files.extend(Path(p) for p in glob.glob(pattern, recursive=True))
-    unique_sorted = sorted(set(files))
-    return [p for p in unique_sorted if p.name == "metrics.csv"] or unique_sorted
-
-
 with st.sidebar:
     st.header("설정")
     search_root = Path(st.text_input("로그 검색 루트", value="runs")).expanduser()
-    metric_files = discover_metric_files(search_root)
+    metric_files = discover_metric_files(search_root, include_all_csv=True)
 
     if not metric_files:
         st.warning(f"CSV 파일을 찾지 못했습니다: {search_root}")

@@ -1,4 +1,5 @@
 import argparse
+import os
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +54,26 @@ def build_parser() -> argparse.ArgumentParser:
     toy_group.add_argument("--bits", type=int, default=16)
     toy_group.add_argument("--sequence_length", type=int, default=5)
     toy_group.add_argument("--max_digits", type=int, default=5)
+
+    wandb_group = parser.add_argument_group("Weights & Biases options")
+    wandb_group.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    wandb_group.add_argument("--wandb_project", type=str, default=os.getenv("WANDB_PROJECT", "halting-criterion"))
+    wandb_group.add_argument("--wandb_entity", type=str, default=os.getenv("WANDB_ENTITY"))
+    wandb_group.add_argument("--wandb_name", type=str, default=os.getenv("WANDB_NAME"))
+    wandb_group.add_argument(
+        "--wandb_tags",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Optional list of tags for wandb run.",
+    )
+    wandb_group.add_argument("--wandb_notes", type=str, default=os.getenv("WANDB_NOTES"))
+    wandb_group.add_argument("--wandb_offline", action="store_true", help="Run wandb in offline mode.")
+    wandb_group.add_argument(
+        "--wandb_log_model",
+        action="store_true",
+        help="Upload model checkpoints/artifacts to wandb.",
+    )
 
     return parser
 

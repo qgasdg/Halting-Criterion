@@ -133,6 +133,17 @@ pip install torch pytorch-lightning numpy streamlit
 
 > `dataset/build_*` 스크립트를 사용할 경우 추가로 `argdantic`, `pydantic`, `tqdm`, `huggingface_hub` 설치가 필요합니다.
 
+### 5.1.1 Weights & Biases (선택)
+
+```bash
+pip install wandb
+wandb login
+python train.py --task maze --model_type act_rnn --data_dir data/maze-30x30-hard-1k --default_root_dir runs/maze_act --wandb --wandb_project halting-criterion
+python train.py --task maze --model_type act_rnn --data_dir data/maze-30x30-hard-1k --default_root_dir runs/maze_act --wandb --wandb_offline
+# 체크포인트 업로드가 필요할 때만: --wandb_log_model
+# 오프라인 실행은 wandb sync <wandb/offline-run-dir> 로 업로드 가능
+```
+
 ## 5.2 기본 학습 (Maze + ACT-RNN)
 
 ```bash

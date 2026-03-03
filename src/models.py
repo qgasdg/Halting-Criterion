@@ -158,6 +158,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         task_name: str = "sudoku",
         focus_token_id: int = -1,
         model_type: str = "act_rnn",
+        disable_ponder_cost: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -183,6 +184,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.target_time_penalty = time_penalty
         self.time_penalty_start = time_penalty_start
         self.time_penalty_warmup_steps = max(0, int(time_penalty_warmup_steps))
+        self.disable_ponder_cost = bool(disable_ponder_cost)
 
     def _compute_current_time_penalty(self) -> float:
         if self.time_penalty_warmup_steps <= 0:
@@ -211,7 +213,8 @@ class ACTPuzzleSolver(pl.LightningModule):
         
         # Loss 계산
         loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
-        loss = loss_cls + ponder_cost
+        effective_ponder_cost = torch.zeros_like(ponder_cost) if self.disable_ponder_cost else ponder_cost
+        loss = loss_cls + effective_ponder_cost
         
         preds = torch.argmax(logits, dim=-1)
         
@@ -227,6 +230,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.log('train_loss', loss, prog_bar=True)
         self.log('loss_cls', loss_cls, prog_bar=False)
         self.log('ponder_cost', ponder_cost, prog_bar=False)
+        self.log('ponder_cost_effective', effective_ponder_cost, prog_bar=False)
         self.log('puz_acc', acc_puzzle, prog_bar=True)  # 퍼즐 단위 (빡센 기준)
         self.log('cell_acc', acc_cell, prog_bar=True)   # 셀 단위 (너그러운 기준)
         if focus_metrics is not None:

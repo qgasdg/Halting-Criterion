@@ -1,7 +1,5 @@
 #!/usr/bin/env python
-"""
-Addition ACT task adapted for this repository.
-"""
+"""Addition task supporting ACT-RNN and Universal Transformer."""
 
 import argparse
 import math
@@ -11,14 +9,14 @@ from typing import List, Tuple
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 from src.models import AdaptiveRNNCell
+from src.universal_transformer import UniversalTransformerEncoder
 
 
 class AdditionDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
-    """Infinite iterable dataset for sequence addition."""
-
     NUM_DIGITS = 10
     NUM_CLASSES = 11
     EMPTY_CLASS = 10
@@ -106,32 +104,71 @@ class AdditionModel(pl.LightningModule):
         learning_rate: float,
         time_limit: int,
         data_workers: int,
+        model_type: str,
+        disable_ponder_cost: bool,
+        ut_act: bool,
+        ut_act_loss_weight: float,
+        ut_heads: int,
+        ut_key_depth: int,
+        ut_value_depth: int,
+        ut_filter_size: int,
     ):
         super().__init__()
         self.save_hyperparameters()
 
         self.dataset = AdditionDataset(sequence_length, max_digits)
-        self.rnn_cell = AdaptiveRNNCell(
-            input_size=self.dataset.feature_size,
-            hidden_size=hidden_size,
-            time_penalty=time_penalty,
-            time_limit=time_limit,
-        )
+        self.model_type = model_type
         self.output_layer = torch.nn.Linear(hidden_size, self.dataset.target_size * AdditionDataset.NUM_CLASSES)
 
+        if model_type == "act_rnn":
+            self.rnn_cell = AdaptiveRNNCell(
+                input_size=self.dataset.feature_size,
+                hidden_size=hidden_size,
+                time_penalty=time_penalty,
+                time_limit=time_limit,
+            )
+        else:
+            self.input_proj = torch.nn.Linear(self.dataset.feature_size, hidden_size)
+            self.encoder = UniversalTransformerEncoder(
+                embedding_size=hidden_size,
+                hidden_size=hidden_size,
+                num_layers=time_limit,
+                num_heads=ut_heads,
+                total_key_depth=ut_key_depth,
+                total_value_depth=ut_value_depth,
+                filter_size=ut_filter_size,
+                max_length=sequence_length,
+                act=ut_act,
+            )
+
     def forward(self, number_sequence: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        hidden = None
-        hidden_seq = []
-        ponder_costs = []
-        step_counts = []
+        if self.model_type == "act_rnn":
+            hidden = None
+            hidden_seq = []
+            ponder_costs = []
+            step_counts = []
 
-        for step in range(number_sequence.size(0)):
-            hidden, step_ponder, step_count, _ = self.rnn_cell(number_sequence[step], hidden)
-            hidden_seq.append(hidden)
-            ponder_costs.append(step_ponder)
-            step_counts.append(step_count.float())
+            for step in range(number_sequence.size(0)):
+                hidden, step_ponder, step_count, _ = self.rnn_cell(number_sequence[step], hidden)
+                hidden_seq.append(hidden)
+                ponder_costs.append(step_ponder)
+                step_counts.append(step_count.float())
 
-        hidden_stacked = torch.stack(hidden_seq, dim=0)
+            hidden_stacked = torch.stack(hidden_seq, dim=0)
+            ponder_cost = torch.stack(ponder_costs).mean()
+            mean_steps = torch.stack(step_counts).mean()
+        else:
+            embedded = self.input_proj(number_sequence.transpose(0, 1))
+            states, act_info = self.encoder(embedded)
+            hidden_stacked = states.transpose(0, 1)
+            if act_info is None:
+                ponder_cost = torch.tensor(0.0, device=number_sequence.device)
+                mean_steps = torch.tensor(float(self.hparams.time_limit), device=number_sequence.device)
+            else:
+                remainders, n_updates = act_info
+                ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
+                mean_steps = n_updates.mean()
+
         logits = self.output_layer(hidden_stacked)
         logits = logits.view(
             logits.size(0),
@@ -139,18 +176,19 @@ class AdditionModel(pl.LightningModule):
             self.dataset.target_size,
             AdditionDataset.NUM_CLASSES,
         )
-        return logits, torch.stack(ponder_costs).mean(), torch.stack(step_counts).mean()
+        return logits, ponder_cost, mean_steps
 
     def training_step(self, batch, _):
         numbers, sums = batch
         logits, ponder_cost, mean_steps = self(numbers)
 
-        cls_loss = torch.nn.functional.cross_entropy(
+        cls_loss = F.cross_entropy(
             logits.view(-1, AdditionDataset.NUM_CLASSES),
             sums.view(-1),
             ignore_index=AdditionDataset.MASK_VALUE,
         )
-        loss = cls_loss + ponder_cost
+        effective_ponder = torch.zeros_like(ponder_cost) if self.hparams.disable_ponder_cost else ponder_cost
+        loss = cls_loss + effective_ponder
 
         with torch.no_grad():
             matches = (logits.argmax(dim=-1) == sums)[1:]
@@ -162,6 +200,7 @@ class AdditionModel(pl.LightningModule):
                 "train/loss_total": loss,
                 "train/loss_classification": cls_loss,
                 "train/loss_ponder": ponder_cost,
+                "train/loss_ponder_effective": effective_ponder,
                 "train/ponder_steps": mean_steps,
                 "train/accuracy_place": place_accuracy,
                 "train/accuracy_sequence": sequence_accuracy,
@@ -194,6 +233,14 @@ def main() -> None:
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--time_limit", type=int, default=20)
     parser.add_argument("--data_workers", type=int, default=1)
+    parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
+    parser.add_argument("--disable_ponder_cost", action="store_true")
+    parser.add_argument("--ut_act", action="store_true")
+    parser.add_argument("--ut_act_loss_weight", type=float, default=1e-3)
+    parser.add_argument("--ut_heads", type=int, default=4)
+    parser.add_argument("--ut_key_depth", type=int, default=128)
+    parser.add_argument("--ut_value_depth", type=int, default=128)
+    parser.add_argument("--ut_filter_size", type=int, default=256)
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
@@ -208,6 +255,14 @@ def main() -> None:
         learning_rate=args.learning_rate,
         time_limit=args.time_limit,
         data_workers=args.data_workers,
+        model_type=args.model_type,
+        disable_ponder_cost=args.disable_ponder_cost,
+        ut_act=args.ut_act,
+        ut_act_loss_weight=args.ut_act_loss_weight,
+        ut_heads=args.ut_heads,
+        ut_key_depth=args.ut_key_depth,
+        ut_value_depth=args.ut_value_depth,
+        ut_filter_size=args.ut_filter_size,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",

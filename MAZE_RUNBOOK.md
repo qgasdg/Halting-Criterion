@@ -276,6 +276,7 @@ mkdir -p ${OUT_DIR}
 ```bash
 python tasks/addition.py \
   --max_steps 5 \
+  --model_type act_rnn \
   --sequence_length 5 \
   --max_digits 5 \
   --hidden_size 64 \
@@ -288,9 +289,11 @@ python tasks/addition.py \
 
 python tasks/parity.py \
   --max_steps 5 \
+  --model_type universal_transformer \
+  --ut_act \
+  --ut_act_loss_weight 0.001 \
   --bits 16 \
   --hidden_size 64 \
-  --time_penalty 0.001 \
   --time_limit 10 \
   --batch_size 2 \
   --learning_rate 1e-4 \
@@ -300,11 +303,14 @@ python tasks/parity.py \
 
 짧은 step으로 실행 성공 여부와 로깅 키(`train/loss_*`, `train/ponder_steps`)를 빠르게 확인합니다.
 
+`--model_type act_rnn|universal_transformer`로 parity/addition 모두에서 모델을 전환할 수 있으며, `--disable_ponder_cost`로 ponder 항을 loss에서 제외할 수 있습니다.
+
 ### 9-4) Addition 학습 예시
 
 ```bash
 python tasks/addition.py \
   --max_steps 200000 \
+  --model_type act_rnn \
   --sequence_length 5 \
   --max_digits 5 \
   --hidden_size 512 \
@@ -328,9 +334,11 @@ python tasks/addition.py \
 ```bash
 python tasks/parity.py \
   --max_steps 200000 \
+  --model_type universal_transformer \
+  --ut_act \
+  --ut_act_loss_weight 0.001 \
   --bits 16 \
   --hidden_size 64 \
-  --time_penalty 0.001 \
   --time_limit 20 \
   --batch_size 32 \
   --learning_rate 1e-4 \
@@ -350,6 +358,7 @@ python tasks/parity.py \
 ```bash
 python tasks/addition.py \
   --max_steps 200000 \
+  --model_type act_rnn \
   --sequence_length 5 \
   --max_digits 5 \
   --hidden_size 512 \

@@ -254,6 +254,7 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
         max_hops: int = 6,
         ut_act: bool = False,
         act_loss_weight: float = 0.001,
+        disable_ponder_cost: bool = False,
         learning_rate: float = 1e-4,
         weight_decay: float = 0.0,
         lr_warmup_epochs: int = 0,
@@ -313,7 +314,8 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
         logits, act_loss, steps, act_stats = self.forward(x)
 
         loss_cls = F.cross_entropy(logits.transpose(1, 2), y)
-        loss = loss_cls + act_loss
+        effective_act_loss = torch.zeros_like(act_loss) if self.hparams.disable_ponder_cost else act_loss
+        loss = loss_cls + effective_act_loss
 
         preds = torch.argmax(logits, dim=-1)
         acc_puzzle = (preds == y).all(dim=1).float().mean()
@@ -323,6 +325,7 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
         self.log("train_loss", loss, prog_bar=True)
         self.log("loss_cls", loss_cls)
         self.log("ponder_cost", act_loss)
+        self.log("ponder_cost_effective", effective_act_loss)
         self.log("puz_acc", acc_puzzle, prog_bar=True)
         self.log("cell_acc", acc_cell, prog_bar=True)
         if focus_metrics is not None:

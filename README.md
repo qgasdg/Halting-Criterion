@@ -150,6 +150,8 @@ python train.py \
   --default_root_dir runs/maze_act
 ```
 
+선택: `--disable_ponder_cost`를 추가하면 ponder cost를 loss에서 제외할 수 있습니다.
+
 ## 5.3 UT 학습
 
 ```bash
@@ -169,6 +171,8 @@ python train.py \
   --default_root_dir runs/maze_ut
 ```
 
+선택: `--disable_ponder_cost`를 추가하면 ACT loss(ponder)를 loss에서 제외할 수 있습니다.
+
 ## 5.4 재시작 학습
 
 ```bash
@@ -186,28 +190,55 @@ python train.py \
 
 ## 6) 토이 태스크 실행
 
-## 6.1 Parity
+## 6.1 Parity (ACT-RNN / UT 공통)
 
 ```bash
+# ACT-RNN
 python tasks/parity.py \
+  --model_type act_rnn \
   --bits 16 \
   --hidden_size 64 \
   --time_limit 20 \
   --time_penalty 1e-3 \
-  --default_root_dir runs/parity
+  --default_root_dir runs/parity_rnn
+
+# Universal Transformer
+python tasks/parity.py \
+  --model_type universal_transformer \
+  --ut_act \
+  --ut_act_loss_weight 1e-3 \
+  --bits 16 \
+  --hidden_size 64 \
+  --time_limit 20 \
+  --default_root_dir runs/parity_ut
 ```
 
-## 6.2 Addition
+## 6.2 Addition (ACT-RNN / UT 공통)
 
 ```bash
+# ACT-RNN
 python tasks/addition.py \
+  --model_type act_rnn \
   --sequence_length 5 \
   --max_digits 5 \
   --hidden_size 512 \
   --time_limit 20 \
   --time_penalty 1e-3 \
-  --default_root_dir runs/addition
+  --default_root_dir runs/addition_rnn
+
+# Universal Transformer
+python tasks/addition.py \
+  --model_type universal_transformer \
+  --ut_act \
+  --ut_act_loss_weight 1e-3 \
+  --sequence_length 5 \
+  --max_digits 5 \
+  --hidden_size 512 \
+  --time_limit 20 \
+  --default_root_dir runs/addition_ut
 ```
+
+> `--disable_ponder_cost`를 지정하면 ACT-RNN의 `time_penalty` 또는 UT의 `ut_act_loss_weight` 항을 loss에서 제외한 채 학습할 수 있습니다.
 
 ---
 
@@ -250,6 +281,7 @@ streamlit run streamlit_parity_addition_inference.py
 - `--task {sudoku,maze}`
 - `--model_type {act_rnn,universal_transformer}`
 - `--default_root_dir`, `--resume_ckpt`
+- `--disable_ponder_cost` (ponder cost on/off)
 
 ACT-RNN 전용:
 

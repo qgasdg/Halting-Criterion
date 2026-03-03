@@ -15,14 +15,18 @@ torch.set_float32_matmul_precision("medium")
 def main():
     args = parse_args()
 
-    train_dataset, train_loader, val_loader = create_dataloaders(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-    )
-
-    focus_token_id = get_focus_token_id(args.task)
-    model = build_model(args, train_dataset.meta, focus_token_id)
+    if args.task in {"parity", "addition"}:
+        model = build_model(args, meta=None, focus_token_id=None)
+    else:
+        if args.data_dir is None:
+            raise ValueError("--data_dir is required for sudoku/maze tasks.")
+        train_dataset, train_loader, val_loader = create_dataloaders(
+            data_dir=args.data_dir,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+        )
+        focus_token_id = get_focus_token_id(args.task)
+        model = build_model(args, train_dataset.meta, focus_token_id)
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",
@@ -43,17 +47,28 @@ def main():
             )
         )
 
-    trainer = pl.Trainer(
-        max_epochs=args.max_epochs,
-        accelerator="auto",
-        devices=1,
-        log_every_n_steps=args.log_every_n_steps,
-        default_root_dir=args.default_root_dir,
-        callbacks=callbacks,
-    )
+    if args.task in {"parity", "addition"}:
+        trainer = pl.Trainer(
+            max_steps=args.max_steps,
+            accelerator="auto",
+            devices=1,
+            log_every_n_steps=args.log_every_n_steps,
+            default_root_dir=args.default_root_dir,
+            callbacks=callbacks,
+        )
+        trainer.fit(model, ckpt_path=args.resume_ckpt)
+    else:
+        trainer = pl.Trainer(
+            max_epochs=args.max_epochs,
+            accelerator="auto",
+            devices=1,
+            log_every_n_steps=args.log_every_n_steps,
+            default_root_dir=args.default_root_dir,
+            callbacks=callbacks,
+        )
 
-    trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
-    trainer.test(model, val_loader, ckpt_path="last", weights_only=False)
+        trainer.fit(model, train_loader, ckpt_path=args.resume_ckpt)
+        trainer.test(model, val_loader, ckpt_path="last", weights_only=False)
 
 
 if __name__ == "__main__":

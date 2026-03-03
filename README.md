@@ -190,25 +190,32 @@ python train.py \
 
 ## 6) 토이 태스크 실행
 
+Parity/Addition은 기존 `tasks/*.py` 단독 실행도 가능하지만,
+현재는 `train.py --task parity|addition`으로 **maze/sudoku와 동일한 진입점에서 관리**하는 방식을 권장합니다.
+
 ## 6.1 Parity (ACT-RNN / UT 공통)
 
 ```bash
 # ACT-RNN
-python tasks/parity.py \
+python train.py \
+  --task parity \
   --model_type act_rnn \
   --bits 16 \
   --hidden_size 64 \
+  --max_steps 200000 \
   --time_limit 20 \
   --time_penalty 1e-3 \
   --default_root_dir runs/parity_rnn
 
 # Universal Transformer
-python tasks/parity.py \
+python train.py \
+  --task parity \
   --model_type universal_transformer \
   --ut_act \
   --ut_act_loss_weight 1e-3 \
   --bits 16 \
   --hidden_size 64 \
+  --max_steps 200000 \
   --time_limit 20 \
   --default_root_dir runs/parity_ut
 ```
@@ -217,23 +224,27 @@ python tasks/parity.py \
 
 ```bash
 # ACT-RNN
-python tasks/addition.py \
+python train.py \
+  --task addition \
   --model_type act_rnn \
   --sequence_length 5 \
   --max_digits 5 \
   --hidden_size 512 \
+  --max_steps 200000 \
   --time_limit 20 \
   --time_penalty 1e-3 \
   --default_root_dir runs/addition_rnn
 
 # Universal Transformer
-python tasks/addition.py \
+python train.py \
+  --task addition \
   --model_type universal_transformer \
   --ut_act \
   --ut_act_loss_weight 1e-3 \
   --sequence_length 5 \
   --max_digits 5 \
   --hidden_size 512 \
+  --max_steps 200000 \
   --time_limit 20 \
   --default_root_dir runs/addition_ut
 ```

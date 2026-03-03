@@ -25,15 +25,15 @@ class DataProcessConfig(BaseModel):
 
     subsample_size: Optional[int] = None
     aug: bool = False
+    val_ratio: float = 0.0
 
 
-def convert_subset(set_name: str, config: DataProcessConfig):
-    # Read CSV
+def load_subset(set_name: str, config: DataProcessConfig):
     all_chars = set()
     grid_size = None
     inputs = []
     labels = []
-    
+
     with open(hf_hub_download(config.source_repo, f"{set_name}.csv", repo_type="dataset"), newline="") as csvfile:  # type: ignore
         reader = csv.reader(csvfile)
         next(reader)  # Skip header
@@ -44,9 +44,16 @@ def convert_subset(set_name: str, config: DataProcessConfig):
             if grid_size is None:
                 n = int(len(q) ** 0.5)
                 grid_size = (n, n)
-                
+
             inputs.append(np.frombuffer(q.encode(), dtype=np.uint8).reshape(grid_size))
             labels.append(np.frombuffer(a.encode(), dtype=np.uint8).reshape(grid_size))
+
+    return inputs, labels, all_chars, grid_size
+
+
+def convert_subset(set_name: str, config: DataProcessConfig, inputs=None, labels=None, all_chars=None, grid_size=None):
+    if inputs is None or labels is None or all_chars is None or grid_size is None:
+        inputs, labels, all_chars, grid_size = load_subset(set_name, config)
 
     # If subsample_size is specified for the training set,
     # randomly sample the desired number of examples.
@@ -132,7 +139,28 @@ def convert_subset(set_name: str, config: DataProcessConfig):
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
-    convert_subset("train", config)
+    if not 0.0 <= config.val_ratio < 1.0:
+        raise ValueError("val_ratio must satisfy 0.0 <= val_ratio < 1.0")
+
+    train_inputs, train_labels, train_chars, grid_size = load_subset("train", config)
+
+    if config.val_ratio > 0.0:
+        val_size = int(len(train_inputs) * config.val_ratio)
+        if val_size <= 0:
+            raise ValueError("val_ratio produced an empty val split. Increase val_ratio or dataset size.")
+
+        indices = np.random.permutation(len(train_inputs))
+        val_idx = indices[:val_size]
+        keep_train_idx = indices[val_size:]
+
+        val_inputs = [train_inputs[i] for i in val_idx]
+        val_labels = [train_labels[i] for i in val_idx]
+        train_inputs = [train_inputs[i] for i in keep_train_idx]
+        train_labels = [train_labels[i] for i in keep_train_idx]
+
+        convert_subset("val", config, val_inputs, val_labels, train_chars, grid_size)
+
+    convert_subset("train", config, train_inputs, train_labels, train_chars, grid_size)
     convert_subset("test", config)
 
 

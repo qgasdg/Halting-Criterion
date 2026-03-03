@@ -22,6 +22,24 @@ class DataProcessConfig(BaseModel):
     subsample_size: Optional[int] = None
     min_difficulty: Optional[int] = None
     num_aug: int = 0
+    val_ratio: float = 0.0
+
+
+def load_subset(set_name: str, config: DataProcessConfig):
+    inputs = []
+    labels = []
+
+    with open(hf_hub_download(config.source_repo, f"{set_name}.csv", repo_type="dataset"), newline="") as csvfile:
+        reader = csv.reader(csvfile)
+        next(reader)  # Skip header
+        for source, q, a, rating in reader:
+            if (config.min_difficulty is None) or (int(rating) >= config.min_difficulty):
+                assert len(q) == 81 and len(a) == 81
+
+                inputs.append(np.frombuffer(q.replace('.', '0').encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
+                labels.append(np.frombuffer(a.encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
+
+    return inputs, labels
 
 
 def shuffle_sudoku(board: np.ndarray, solution: np.ndarray):
@@ -57,20 +75,9 @@ def shuffle_sudoku(board: np.ndarray, solution: np.ndarray):
     return apply_transformation(board), apply_transformation(solution)
 
 
-def convert_subset(set_name: str, config: DataProcessConfig):
-    # Read CSV
-    inputs = []
-    labels = []
-    
-    with open(hf_hub_download(config.source_repo, f"{set_name}.csv", repo_type="dataset"), newline="") as csvfile:
-        reader = csv.reader(csvfile)
-        next(reader)  # Skip header
-        for source, q, a, rating in reader:
-            if (config.min_difficulty is None) or (int(rating) >= config.min_difficulty):
-                assert len(q) == 81 and len(a) == 81
-                
-                inputs.append(np.frombuffer(q.replace('.', '0').encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
-                labels.append(np.frombuffer(a.encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
+def convert_subset(set_name: str, config: DataProcessConfig, inputs=None, labels=None):
+    if inputs is None or labels is None:
+        inputs, labels = load_subset(set_name, config)
 
     # If subsample_size is specified for the training set,
     # randomly sample the desired number of examples.
@@ -159,7 +166,28 @@ def convert_subset(set_name: str, config: DataProcessConfig):
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
-    convert_subset("train", config)
+    if not 0.0 <= config.val_ratio < 1.0:
+        raise ValueError("val_ratio must satisfy 0.0 <= val_ratio < 1.0")
+
+    train_inputs, train_labels = load_subset("train", config)
+
+    if config.val_ratio > 0.0:
+        val_size = int(len(train_inputs) * config.val_ratio)
+        if val_size <= 0:
+            raise ValueError("val_ratio produced an empty val split. Increase val_ratio or dataset size.")
+
+        indices = np.random.permutation(len(train_inputs))
+        val_idx = indices[:val_size]
+        keep_train_idx = indices[val_size:]
+
+        val_inputs = [train_inputs[i] for i in val_idx]
+        val_labels = [train_labels[i] for i in val_idx]
+        train_inputs = [train_inputs[i] for i in keep_train_idx]
+        train_labels = [train_labels[i] for i in keep_train_idx]
+
+        convert_subset("val", config, val_inputs, val_labels)
+
+    convert_subset("train", config, train_inputs, train_labels)
     convert_subset("test", config)
 
 

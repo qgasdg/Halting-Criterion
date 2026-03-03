@@ -30,10 +30,14 @@ def create_dataloaders(
     data_dir: str,
     batch_size: int,
     num_workers: int,
-) -> Tuple[NpyPuzzleDataset, DataLoader, DataLoader]:
+) -> Tuple[NpyPuzzleDataset, DataLoader, DataLoader, DataLoader]:
     train_dataset = NpyPuzzleDataset(data_dir, split="train")
-    val_split = "test" if os.path.exists(os.path.join(data_dir, "test")) else "train"
+    val_split = "val" if os.path.exists(os.path.join(data_dir, "val")) else (
+        "test" if os.path.exists(os.path.join(data_dir, "test")) else "train"
+    )
+    test_split = "test" if os.path.exists(os.path.join(data_dir, "test")) else val_split
     val_dataset = NpyPuzzleDataset(data_dir, split=val_split)
+    test_dataset = NpyPuzzleDataset(data_dir, split=test_split)
 
     use_persistent_workers = num_workers > 0
     train_loader = DataLoader(
@@ -49,5 +53,11 @@ def create_dataloaders(
         num_workers=num_workers,
         persistent_workers=use_persistent_workers,
     )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        persistent_workers=use_persistent_workers,
+    )
 
-    return train_dataset, train_loader, val_loader
+    return train_dataset, train_loader, val_loader, test_loader

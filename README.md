@@ -110,11 +110,17 @@ data/<dataset-name>/
 │  ├─ all__inputs.npy
 │  ├─ all__labels.npy
 │  └─ dataset.json
+├─ val/                                  # 선택: 빌더에서 val_ratio>0으로 생성
+│  ├─ all__inputs.npy
+│  ├─ all__labels.npy
+│  └─ dataset.json
 └─ test/
    ├─ all__inputs.npy
    ├─ all__labels.npy
    └─ dataset.json
 ```
+
+학습 시에는 `val/`이 있으면 validation으로 사용하고, 없으면 `test/`를 validation으로 사용합니다. 최종 `trainer.test`는 `test/`가 있으면 `test/`로 평가하고, 없으면 validation split을 재사용합니다.
 
 `dataset.json`에는 최소한 `seq_len`, `vocab_size` 등이 포함되어 있어 모델 생성에 사용됩니다.
 
@@ -261,6 +267,23 @@ python train.py \
 ```
 
 > `--disable_ponder_cost`를 지정하면 ACT-RNN의 `time_penalty` 또는 UT의 `ut_act_loss_weight` 항을 loss에서 제외한 채 학습할 수 있습니다.
+
+토이 태스크는 train은 기존처럼 on-the-fly 무한 생성으로 학습하고, 평가는 고정 샘플 세트를 사용합니다.
+
+- 공통 고정 평가 옵션
+  - `--toy_val_size` (기본 10000)
+  - `--toy_test_size` (기본 50000)
+  - `--toy_eval_seed` (기본 1234)
+- Parity ID/near-OOD/OOD
+  - ID: `bits`
+  - near-OOD: `--parity_near_ood_bits` (기본 `bits+4`)
+  - OOD: `--parity_ood_bits` (기본 `bits+8`)
+- Addition ID/near-OOD/OOD
+  - ID: `sequence_length`, `max_digits`
+  - near-OOD: `--addition_near_ood_sequence_length`, `--addition_near_ood_max_digits` (기본 `+2`, `+1`)
+  - OOD: `--addition_ood_sequence_length`, `--addition_ood_max_digits` (기본 `+4`, `+2`)
+
+학습 종료 후 `trainer.test(ckpt_path="last")`에서 `test/id`, `test/near_ood`, `test/ood` 지표를 함께 기록합니다.
 
 ---
 

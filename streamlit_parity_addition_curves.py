@@ -1,18 +1,13 @@
-import glob
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from src.dev_utils import discover_metric_files
+
 st.set_page_config(page_title="Parity/Addition Curve Viewer", layout="wide")
 st.title("📉 Parity/Addition 학습 곡선 뷰어")
 st.caption("metrics.csv에서 loss/accuracy 계열을 자동 추려서 곡선을 확인합니다.")
-
-
-def discover_metric_files(root: Path) -> list[Path]:
-    files = [Path(p) for p in glob.glob(str(root / "**/metrics.csv"), recursive=True)]
-    return sorted(set(files))
-
 
 def smooth_series(values: pd.Series, window: int) -> pd.Series:
     if window <= 1:

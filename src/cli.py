@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--log_every_n_steps", type=int, default=1)
+    parser.add_argument(
+        "--disable_ponder_cost",
+        action="store_true",
+        help="Disable ponder/ACT regularization term from the training loss.",
+    )
 
     act_group = parser.add_argument_group("ACT-RNN options")
     act_group.add_argument("--time_penalty", type=float, default=0.001)

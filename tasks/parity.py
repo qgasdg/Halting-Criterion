@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Parity ACT task adapted for this repository."""
+"""Parity task supporting ACT-RNN and Universal Transformer."""
 
 import argparse
 import random
@@ -7,9 +7,11 @@ from typing import Tuple
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 from src.models import AdaptiveRNNCell
+from src.universal_transformer import UniversalTransformerEncoder
 
 
 class ParityDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
@@ -41,29 +43,68 @@ class ParityModel(pl.LightningModule):
         learning_rate: float,
         time_limit: int,
         data_workers: int,
+        model_type: str,
+        disable_ponder_cost: bool,
+        ut_act: bool,
+        ut_act_loss_weight: float,
+        ut_heads: int,
+        ut_key_depth: int,
+        ut_value_depth: int,
+        ut_filter_size: int,
     ):
         super().__init__()
         self.save_hyperparameters()
 
         self.dataset = ParityDataset(bits)
-        self.cell = AdaptiveRNNCell(
-            input_size=bits,
-            hidden_size=hidden_size,
-            time_penalty=time_penalty,
-            time_limit=time_limit,
-        )
-        self.output_layer = torch.nn.Linear(hidden_size, 1)
+        self.model_type = model_type
+        if model_type == "act_rnn":
+            self.rnn_cell = AdaptiveRNNCell(
+                input_size=bits,
+                hidden_size=hidden_size,
+                time_penalty=time_penalty,
+                time_limit=time_limit,
+            )
+            self.output_layer = torch.nn.Linear(hidden_size, 1)
+        else:
+            self.input_proj = torch.nn.Linear(1, hidden_size)
+            self.encoder = UniversalTransformerEncoder(
+                embedding_size=hidden_size,
+                hidden_size=hidden_size,
+                num_layers=time_limit,
+                num_heads=ut_heads,
+                total_key_depth=ut_key_depth,
+                total_value_depth=ut_value_depth,
+                filter_size=ut_filter_size,
+                max_length=bits,
+                act=ut_act,
+            )
+            self.output_layer = torch.nn.Linear(hidden_size, 1)
 
     def forward(self, binary_vector: torch.Tensor):
-        hidden, ponder_cost, steps, _ = self.cell(binary_vector)
-        logits = self.output_layer(hidden).squeeze(1)
+        if self.model_type == "act_rnn":
+            hidden, ponder_cost, steps, _ = self.rnn_cell(binary_vector)
+            logits = self.output_layer(hidden).squeeze(1)
+            return logits, ponder_cost, steps
+
+        embedded = self.input_proj(binary_vector.unsqueeze(-1))
+        states, act_info = self.encoder(embedded)
+        pooled = states.mean(dim=1)
+        logits = self.output_layer(pooled).squeeze(1)
+        if act_info is None:
+            ponder_cost = torch.tensor(0.0, device=binary_vector.device)
+            steps = torch.full((binary_vector.size(0),), float(self.hparams.time_limit), device=binary_vector.device)
+        else:
+            remainders, n_updates = act_info
+            ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
+            steps = n_updates.mean(dim=1)
         return logits, ponder_cost, steps
 
     def training_step(self, batch, _):
         vectors, targets = batch
         logits, ponder_cost, steps = self(vectors)
-        cls_loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
-        loss = cls_loss + ponder_cost
+        cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
+        effective_ponder = torch.zeros_like(ponder_cost) if self.hparams.disable_ponder_cost else ponder_cost
+        loss = cls_loss + effective_ponder
 
         with torch.no_grad():
             accuracy = (logits > 0).eq(targets > 0.5).float().mean()
@@ -74,6 +115,7 @@ class ParityModel(pl.LightningModule):
                 "train/loss_total": loss,
                 "train/loss_classification": cls_loss,
                 "train/loss_ponder": ponder_cost,
+                "train/loss_ponder_effective": effective_ponder,
                 "train/accuracy": accuracy,
                 "train/steps": mean_steps,
                 "train/ponder_steps": mean_steps,
@@ -104,6 +146,14 @@ def main() -> None:
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--time_limit", type=int, default=20)
     parser.add_argument("--data_workers", type=int, default=1)
+    parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
+    parser.add_argument("--disable_ponder_cost", action="store_true")
+    parser.add_argument("--ut_act", action="store_true")
+    parser.add_argument("--ut_act_loss_weight", type=float, default=1e-3)
+    parser.add_argument("--ut_heads", type=int, default=4)
+    parser.add_argument("--ut_key_depth", type=int, default=64)
+    parser.add_argument("--ut_value_depth", type=int, default=64)
+    parser.add_argument("--ut_filter_size", type=int, default=128)
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
@@ -117,6 +167,14 @@ def main() -> None:
         learning_rate=args.learning_rate,
         time_limit=args.time_limit,
         data_workers=args.data_workers,
+        model_type=args.model_type,
+        disable_ponder_cost=args.disable_ponder_cost,
+        ut_act=args.ut_act,
+        ut_act_loss_weight=args.ut_act_loss_weight,
+        ut_heads=args.ut_heads,
+        ut_key_depth=args.ut_key_depth,
+        ut_value_depth=args.ut_value_depth,
+        ut_filter_size=args.ut_filter_size,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",

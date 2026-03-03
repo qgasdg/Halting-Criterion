@@ -33,6 +33,7 @@ def build_model(args, meta, focus_token_id):
             max_hops=args.ut_max_hops,
             ut_act=args.ut_act,
             act_loss_weight=args.ut_act_loss_weight,
+            disable_ponder_cost=args.disable_ponder_cost,
             **common_model_kwargs,
         )
 
@@ -42,5 +43,6 @@ def build_model(args, meta, focus_token_id):
         time_penalty_start=args.time_penalty_start,
         time_penalty_warmup_steps=args.time_penalty_warmup_steps,
         time_limit=args.time_limit,
+        disable_ponder_cost=args.disable_ponder_cost,
         **common_model_kwargs,
     )

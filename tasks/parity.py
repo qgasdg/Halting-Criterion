@@ -25,10 +25,10 @@ class ParityDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
             yield self._make_example()
 
     def _make_example(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        vec = torch.zeros(self.bits, dtype=torch.float32)
+        vec = torch.zeros(self.bits, 1, dtype=torch.float32)
         num_bits = random.randint(1, self.bits)
         bits = torch.randint(2, size=(num_bits,)) * 2 - 1
-        vec[:num_bits] = bits.float()
+        vec[:num_bits, 0] = bits.float()
         parity = (bits == 1).sum() % 2
         return vec, parity.float()
 
@@ -56,10 +56,10 @@ class FixedParityDataset(torch.utils.data.Dataset):  # type: ignore[misc]
         self.targets = torch.stack([y for _, y in examples], dim=0)
 
     def _make_example(self, generator: torch.Generator) -> Tuple[torch.Tensor, torch.Tensor]:
-        vec = torch.zeros(self.bits, dtype=torch.float32)
+        vec = torch.zeros(self.bits, 1, dtype=torch.float32)
         num_bits = random.randint(1, self.bits)
         bits = torch.randint(2, size=(num_bits,), generator=generator) * 2 - 1
-        vec[:num_bits] = bits.float()
+        vec[:num_bits, 0] = bits.float()
         parity = (bits == 1).sum() % 2
         return vec, parity.float()
 
@@ -111,7 +111,7 @@ class ParityModel(pl.LightningModule):
 
         if model_type == "act_rnn":
             self.rnn_cell = AdaptiveRNNCell(
-                input_size=bits,
+                input_size=1,
                 hidden_size=hidden_size,
                 time_penalty=time_penalty,
                 time_limit=time_limit,
@@ -132,19 +132,34 @@ class ParityModel(pl.LightningModule):
             )
             self.output_layer = torch.nn.Linear(hidden_size, 1)
 
-    def forward(self, binary_vector: torch.Tensor):
+    def forward(self, binary_sequence: torch.Tensor):
         if self.model_type == "act_rnn":
-            hidden, ponder_cost, steps, _ = self.rnn_cell(binary_vector)
+            batch_size, seq_len, _ = binary_sequence.shape
+            hidden = torch.zeros(batch_size, self.hparams.hidden_size, device=binary_sequence.device)
+
+            token_ponder_costs = []
+            token_steps = []
+            for token_idx in range(seq_len):
+                token_hidden, token_ponder_cost, token_step_count, _ = self.rnn_cell(
+                    binary_sequence[:, token_idx, :],
+                    hidden=hidden,
+                )
+                hidden = token_hidden
+                token_ponder_costs.append(token_ponder_cost)
+                token_steps.append(token_step_count)
+
+            ponder_cost = torch.stack(token_ponder_costs).mean()
+            steps = torch.stack(token_steps, dim=1).mean(dim=1)
             logits = self.output_layer(hidden).squeeze(1)
             return logits, ponder_cost, steps
 
-        embedded = self.input_proj(binary_vector.unsqueeze(-1))
+        embedded = self.input_proj(binary_sequence)
         states, act_info = self.encoder(embedded)
         pooled = states.mean(dim=1)
         logits = self.output_layer(pooled).squeeze(1)
         if act_info is None:
-            ponder_cost = torch.tensor(0.0, device=binary_vector.device)
-            steps = torch.full((binary_vector.size(0),), float(self.hparams.time_limit), device=binary_vector.device)
+            ponder_cost = torch.tensor(0.0, device=binary_sequence.device)
+            steps = torch.full((binary_sequence.size(0),), float(self.hparams.time_limit), device=binary_sequence.device)
         else:
             remainders, n_updates = act_info
             ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
@@ -152,8 +167,8 @@ class ParityModel(pl.LightningModule):
         return logits, ponder_cost, steps
 
     def _shared_eval_step(self, batch, stage: str):
-        vectors, targets = batch
-        logits, ponder_cost, steps = self(vectors)
+        sequences, targets = batch
+        logits, ponder_cost, steps = self(sequences)
         cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
 
         accuracy = (logits > 0).eq(targets > 0.5).float().mean()
@@ -172,8 +187,8 @@ class ParityModel(pl.LightningModule):
         )
 
     def training_step(self, batch, _):
-        vectors, targets = batch
-        logits, ponder_cost, steps = self(vectors)
+        sequences, targets = batch
+        logits, ponder_cost, steps = self(sequences)
         cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
         effective_ponder = torch.zeros_like(ponder_cost) if self.hparams.disable_ponder_cost else ponder_cost
         loss = cls_loss + effective_ponder

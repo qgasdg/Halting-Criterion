@@ -30,7 +30,7 @@
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install torch pytorch-lightning numpy streamlit
+pip install torch pytorch-lightning numpy streamlit argdantic huggingface_hub
 ```
 
 > 클러스터/서버 환경이면 CUDA 버전에 맞는 torch 설치 명령을 사용하세요.
@@ -48,7 +48,7 @@ pip install torch pytorch-lightning numpy streamlit
 ### (선택) TRM 비교용 8방향 증강 데이터 생성
 
 ```bash
-python dataset/build_maze_dataset.py preprocess-data \
+python dataset/build_maze_dataset.py \
   --output-dir data/maze-30x30-hard-1k-aug8 \
   --subsample-size 1000 \
   --aug

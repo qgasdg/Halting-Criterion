@@ -150,6 +150,17 @@ python train.py --task maze --model_type act_rnn --data_dir data/maze-30x30-hard
 # 오프라인 실행은 wandb sync <wandb/offline-run-dir> 로 업로드 가능
 ```
 
+주요 W&B CLI 인자는 아래와 같습니다.
+
+- `--wandb`: W&B 로깅을 활성화합니다.
+- `--wandb_project`: 프로젝트 이름을 지정합니다. (기본값: `halting-criterion`, 환경변수 `WANDB_PROJECT`로도 설정 가능)
+- `--wandb_entity`: 팀/사용자(entity)를 지정합니다. (환경변수 `WANDB_ENTITY` 지원)
+- `--wandb_name`: 실행(run) 이름을 지정합니다. (환경변수 `WANDB_NAME` 지원)
+- `--wandb_tags tag1 tag2 ...`: run에 태그를 여러 개 부여합니다.
+- `--wandb_notes`: run 설명(notes)을 추가합니다. (환경변수 `WANDB_NOTES` 지원)
+- `--wandb_offline`: 네트워크 없이 오프라인 모드로 기록하고, 이후 `wandb sync`로 업로드할 수 있습니다.
+- `--wandb_log_model`: 체크포인트/아티팩트를 W&B에 업로드합니다.
+
 ## 5.2 기본 학습 (Maze + ACT-RNN)
 
 ```bash

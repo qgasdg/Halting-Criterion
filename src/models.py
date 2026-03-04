@@ -246,7 +246,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.log('halt_natural_ratio', act_stats['natural_halt_ratio'], prog_bar=False)
         self.log('halt_forced_ratio', act_stats['forced_halt_ratio'], prog_bar=False)
         for i, p_mean in enumerate(act_stats['accumulated_p_curve']):
-            self.log(f'accumulated_p_t{i+1}', p_mean, prog_bar=False)
+            self.log(f'accumulated_p_t{i + 1:02d}', p_mean, prog_bar=False)
         
         return loss
 

@@ -5,7 +5,7 @@ import argparse
 import math
 import random
 import string
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import pytorch_lightning as pl
 import torch
@@ -136,12 +136,7 @@ class AdditionModel(pl.LightningModule):
         ut_value_depth: int,
         ut_filter_size: int,
         val_size: int = 10000,
-        test_size: int = 50000,
         eval_seed: int = 1234,
-        near_ood_sequence_length: Optional[int] = None,
-        ood_sequence_length: Optional[int] = None,
-        near_ood_max_digits: Optional[int] = None,
-        ood_max_digits: Optional[int] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -150,17 +145,7 @@ class AdditionModel(pl.LightningModule):
         self.model_type = model_type
         self.output_layer = torch.nn.Linear(hidden_size, self.dataset.target_size * AdditionDataset.NUM_CLASSES)
 
-        near_seq = near_ood_sequence_length if near_ood_sequence_length is not None else sequence_length + 2
-        ood_seq = ood_sequence_length if ood_sequence_length is not None else sequence_length + 4
-        near_digits = near_ood_max_digits if near_ood_max_digits is not None else max_digits + 1
-        ood_digits = ood_max_digits if ood_max_digits is not None else max_digits + 2
-
         self.val_dataset = FixedAdditionDataset(sequence_length, max_digits, val_size, eval_seed)
-        self.test_datasets = {
-            "id": FixedAdditionDataset(sequence_length, max_digits, test_size, eval_seed + 1),
-            "near_ood": FixedAdditionDataset(near_seq, near_digits, test_size, eval_seed + 2),
-            "ood": FixedAdditionDataset(ood_seq, ood_digits, test_size, eval_seed + 3),
-        }
 
         if model_type == "act_rnn":
             self.rnn_cell = AdaptiveRNNCell(
@@ -179,7 +164,7 @@ class AdditionModel(pl.LightningModule):
                 total_key_depth=ut_key_depth,
                 total_value_depth=ut_value_depth,
                 filter_size=ut_filter_size,
-                max_length=max(sequence_length, near_seq, ood_seq),
+                max_length=sequence_length,
                 act=ut_act,
             )
 
@@ -280,11 +265,6 @@ class AdditionModel(pl.LightningModule):
     def validation_step(self, batch, _):
         self._shared_eval_step(batch, "val")
 
-    def test_step(self, batch, _, dataloader_idx=0):
-        names = ["id", "near_ood", "ood"]
-        stage = f"test/{names[dataloader_idx]}"
-        self._shared_eval_step(batch, stage)
-
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
 
@@ -305,18 +285,6 @@ class AdditionModel(pl.LightningModule):
             pin_memory=self.device.type == "cuda",
             collate_fn=AdditionDataset._collate_examples,
         )
-
-    def test_dataloader(self):
-        return [
-            torch.utils.data.DataLoader(
-                ds,
-                batch_size=self.hparams.batch_size,
-                num_workers=self.hparams.data_workers,
-                pin_memory=self.device.type == "cuda",
-                collate_fn=AdditionDataset._collate_examples,
-            )
-            for ds in self.test_datasets.values()
-        ]
 
 
 def main() -> None:
@@ -339,12 +307,7 @@ def main() -> None:
     parser.add_argument("--ut_value_depth", type=int, default=128)
     parser.add_argument("--ut_filter_size", type=int, default=256)
     parser.add_argument("--val_size", type=int, default=10000)
-    parser.add_argument("--test_size", type=int, default=50000)
     parser.add_argument("--eval_seed", type=int, default=1234)
-    parser.add_argument("--near_ood_sequence_length", type=int, default=None)
-    parser.add_argument("--ood_sequence_length", type=int, default=None)
-    parser.add_argument("--near_ood_max_digits", type=int, default=None)
-    parser.add_argument("--ood_max_digits", type=int, default=None)
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
@@ -368,12 +331,7 @@ def main() -> None:
         ut_value_depth=args.ut_value_depth,
         ut_filter_size=args.ut_filter_size,
         val_size=args.val_size,
-        test_size=args.test_size,
         eval_seed=args.eval_seed,
-        near_ood_sequence_length=args.near_ood_sequence_length,
-        ood_sequence_length=args.ood_sequence_length,
-        near_ood_max_digits=args.near_ood_max_digits,
-        ood_max_digits=args.ood_max_digits,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",
@@ -390,7 +348,6 @@ def main() -> None:
         callbacks=[checkpoint_callback],
     )
     trainer.fit(model, ckpt_path=args.resume_ckpt)
-    trainer.test(model, ckpt_path="last")
 
 
 if __name__ == "__main__":

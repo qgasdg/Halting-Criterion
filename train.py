@@ -71,7 +71,7 @@ def main():
 
     loggers = build_loggers(args)
 
-    if args.task in {"parity", "addition"}:
+    if args.task == "parity":
         trainer = pl.Trainer(
             max_steps=args.max_steps,
             accelerator="auto",
@@ -83,6 +83,17 @@ def main():
         )
         trainer.fit(model, ckpt_path=args.resume_ckpt)
         trainer.test(model, ckpt_path="last", weights_only=False)
+    elif args.task == "addition":
+        trainer = pl.Trainer(
+            max_steps=args.max_steps,
+            accelerator="auto",
+            devices=1,
+            log_every_n_steps=args.log_every_n_steps,
+            default_root_dir=args.default_root_dir,
+            callbacks=callbacks,
+            logger=loggers,
+        )
+        trainer.fit(model, ckpt_path=args.resume_ckpt)
     else:
         trainer = pl.Trainer(
             max_epochs=args.max_epochs,

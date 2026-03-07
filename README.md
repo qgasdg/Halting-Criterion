@@ -289,12 +289,10 @@ python train.py \
   - ID: `bits`
   - near-OOD: `--parity_near_ood_bits` (기본 `bits+4`)
   - OOD: `--parity_ood_bits` (기본 `bits+8`)
-- Addition ID/near-OOD/OOD
-  - ID: `sequence_length`, `max_digits`
-  - near-OOD: `--addition_near_ood_sequence_length`, `--addition_near_ood_max_digits` (기본 `+2`, `+1`)
-  - OOD: `--addition_ood_sequence_length`, `--addition_ood_max_digits` (기본 `+4`, `+2`)
+- Addition
+  - ID validation only: `sequence_length`, `max_digits`
 
-학습 종료 후 `trainer.test(ckpt_path="last")`에서 `test/id`, `test/near_ood`, `test/ood` 지표를 함께 기록합니다.
+학습 종료 후 Parity는 `trainer.test(ckpt_path="last")`에서 `test/id`, `test/near_ood`, `test/ood` 지표를 기록하고, Addition은 validation 지표만 기록합니다.
 
 ---
 

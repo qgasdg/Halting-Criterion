@@ -261,6 +261,7 @@ class AdditionModel(pl.LightningModule):
 
         matches = (logits.argmax(dim=-1) == sums)[1:]
         place_accuracy = matches.float().mean()
+        step_accuracy = matches.all(dim=-1).float().mean()
         sequence_accuracy = matches.all(dim=0).all(dim=-1).float().mean()
 
         self.log_dict(
@@ -269,6 +270,7 @@ class AdditionModel(pl.LightningModule):
                 f"{stage}/loss_ponder": ponder_cost,
                 f"{stage}/ponder_steps": mean_steps,
                 f"{stage}/accuracy_place": place_accuracy,
+                f"{stage}/accuracy_step": step_accuracy,
                 f"{stage}/accuracy_sequence": sequence_accuracy,
             },
             prog_bar=(stage != "test"),
@@ -291,6 +293,7 @@ class AdditionModel(pl.LightningModule):
         with torch.no_grad():
             matches = (logits.argmax(dim=-1) == sums)[1:]
             place_accuracy = matches.float().mean()
+            step_accuracy = matches.all(dim=-1).float().mean()
             sequence_accuracy = matches.all(dim=0).all(dim=-1).float().mean()
 
         self.log_dict(
@@ -301,6 +304,7 @@ class AdditionModel(pl.LightningModule):
                 "train/loss_ponder_effective": effective_ponder,
                 "train/ponder_steps": mean_steps,
                 "train/accuracy_place": place_accuracy,
+                "train/accuracy_step": step_accuracy,
                 "train/accuracy_sequence": sequence_accuracy,
             },
             prog_bar=True,

@@ -95,6 +95,8 @@ class ParityModel(pl.LightningModule):
         near_ood_bits: Optional[int] = None,
         ood_bits: Optional[int] = None,
         halt_warmup_steps: int = 0,
+        rnn_halt_bias: float = 0.1,
+        ut_halt_bias: float = 0.1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -117,6 +119,7 @@ class ParityModel(pl.LightningModule):
                 hidden_size=hidden_size,
                 time_penalty=time_penalty,
                 time_limit=time_limit,
+                halt_bias_init=rnn_halt_bias,
             )
             self.output_layer = torch.nn.Linear(hidden_size, 1)
         else:
@@ -131,6 +134,7 @@ class ParityModel(pl.LightningModule):
                 filter_size=ut_filter_size,
                 max_length=max(bits, near_bits, far_bits),
                 act=ut_act,
+                halt_bias_init=ut_halt_bias,
             )
             self.output_layer = torch.nn.Linear(hidden_size, 1)
 

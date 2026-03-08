@@ -10,7 +10,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--weight_decay", type=float, default=1.0)
+    parser.add_argument("--weight_decay", type=float, default=0.1)
     parser.add_argument("--lr_warmup_epochs", type=int, default=5)
     parser.add_argument("--use_ema", action="store_true")
     parser.add_argument("--ema_decay", type=float, default=0.999)
@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     act_group.add_argument("--time_penalty_start", type=float, default=0.0)
     act_group.add_argument("--time_penalty_warmup_steps", type=int, default=0)
     act_group.add_argument("--time_limit", type=int, default=16)
+    act_group.add_argument("--rnn_halt_bias", type=float, default=0.1)
 
     ut_group = parser.add_argument_group("Universal Transformer options")
     ut_group.add_argument("--ut_embedding_size", type=int, default=64)
@@ -49,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     ut_group.add_argument("--ut_max_hops", type=int, default=6)
     ut_group.add_argument("--ut_act", action="store_true")
     ut_group.add_argument("--ut_act_loss_weight", type=float, default=0.001)
+    ut_group.add_argument("--ut_halt_bias", type=float, default=0.1)
 
     toy_group = parser.add_argument_group("Toy task options")
     toy_group.add_argument("--bits", type=int, default=16)

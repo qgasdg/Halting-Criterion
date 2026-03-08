@@ -59,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     toy_group.add_argument("--toy_eval_seed", type=int, default=1234)
     toy_group.add_argument("--parity_near_ood_bits", type=int, default=None)
     toy_group.add_argument("--parity_ood_bits", type=int, default=None)
+    toy_group.add_argument("--halt_warmup_steps", type=int, default=0)
 
     wandb_group = parser.add_argument_group("Weights & Biases options")
     wandb_group.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")

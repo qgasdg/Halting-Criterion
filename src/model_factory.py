@@ -35,6 +35,7 @@ def build_model(args, meta, focus_token_id):
             eval_seed=args.toy_eval_seed,
             near_ood_bits=args.parity_near_ood_bits,
             ood_bits=args.parity_ood_bits,
+            halt_warmup_steps=args.halt_warmup_steps,
         )
 
     if args.task == "addition":
@@ -57,6 +58,7 @@ def build_model(args, meta, focus_token_id):
             ut_filter_size=args.ut_filter_size,
             val_size=args.toy_val_size,
             eval_seed=args.toy_eval_seed,
+            halt_warmup_steps=args.halt_warmup_steps,
         )
 
     common_model_kwargs = dict(

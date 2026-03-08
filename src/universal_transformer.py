@@ -139,7 +139,7 @@ class ACTBasic(nn.Module):
     def __init__(self, hidden_size: int, halt_epsilon: float = 0.1):
         super().__init__()
         self.p = nn.Linear(hidden_size, 1)
-        self.p.bias.data.fill_(1.0)
+        self.p.bias.data.fill_(-1.0)
         self.sigma = nn.Sigmoid()
         self.threshold = 1.0 - halt_epsilon
 

@@ -11,6 +11,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.utilities.rank_zero import rank_zero_info
 
 from src.models import AdaptiveRNNCell
 from src.universal_transformer import UniversalTransformerEncoder
@@ -137,6 +138,7 @@ class AdditionModel(pl.LightningModule):
         ut_filter_size: int,
         val_size: int = 10000,
         eval_seed: int = 1234,
+        halt_warmup_steps: int = 0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -167,6 +169,45 @@ class AdditionModel(pl.LightningModule):
                 max_length=sequence_length,
                 act=ut_act,
             )
+
+        self._halting_frozen = False
+
+    def _halting_named_parameters(self):
+        if self.model_type == "act_rnn":
+            return list(self.rnn_cell.halting_layer.named_parameters(prefix="rnn_cell.halting_layer"))
+        if self.hparams.ut_act and hasattr(self.encoder, "act_fn"):
+            return list(self.encoder.act_fn.p.named_parameters(prefix="encoder.act_fn.p"))
+        return []
+
+    def _set_halting_frozen(self, frozen: bool) -> None:
+        if self._halting_frozen == frozen:
+            return
+
+        halting_params = self._halting_named_parameters()
+        if not halting_params:
+            self._halting_frozen = False
+            return
+
+        for _, param in halting_params:
+            param.requires_grad = not frozen
+
+        action = "freeze" if frozen else "unfreeze"
+        names = ", ".join(name for name, _ in halting_params)
+        rank_zero_info(
+            f"[halt_warmup] {action} halting params at global_step={self.global_step}: {names}"
+        )
+        self._halting_frozen = frozen
+
+    def on_fit_start(self) -> None:
+        if self.hparams.halt_warmup_steps <= 0:
+            return
+        self._set_halting_frozen(self.global_step < self.hparams.halt_warmup_steps)
+
+    def on_train_batch_start(self, batch, batch_idx):
+        if self.hparams.halt_warmup_steps <= 0:
+            return
+        should_freeze = self.global_step < self.hparams.halt_warmup_steps
+        self._set_halting_frozen(should_freeze)
 
     def forward(self, number_sequence: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.model_type == "act_rnn":
@@ -311,6 +352,7 @@ def main() -> None:
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
+    parser.add_argument("--halt_warmup_steps", type=int, default=0)
     args = parser.parse_args()
 
     model = AdditionModel(
@@ -332,6 +374,7 @@ def main() -> None:
         ut_filter_size=args.ut_filter_size,
         val_size=args.val_size,
         eval_seed=args.eval_seed,
+        halt_warmup_steps=args.halt_warmup_steps,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",

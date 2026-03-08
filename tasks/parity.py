@@ -95,8 +95,8 @@ class ParityModel(pl.LightningModule):
         near_ood_bits: Optional[int] = None,
         ood_bits: Optional[int] = None,
         halt_warmup_steps: int = 0,
-        rnn_halt_bias: float = 1.0,
-        ut_halt_bias: float = -1.0,
+        rnn_halt_bias: float = 0.1,
+        ut_halt_bias: float = 0.1,
     ):
         super().__init__()
         self.save_hyperparameters()

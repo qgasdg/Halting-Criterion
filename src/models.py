@@ -26,7 +26,7 @@ class AdaptiveRNNCell(nn.Module):
         time_limit: int = 20,
         halt_epsilon: float = 0.01,
         dropout: float = 0.0,
-        halt_bias_init: float = 1.0,
+        halt_bias_init: float = 0.1,
     ):
         super().__init__()
         self.input_size = input_size
@@ -160,7 +160,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         focus_token_id: int = -1,
         model_type: str = "act_rnn",
         disable_ponder_cost: bool = False,
-        rnn_halt_bias: float = 1.0,
+        rnn_halt_bias: float = 0.1,
     ):
         super().__init__()
         self.save_hyperparameters()

@@ -26,6 +26,7 @@ class AdaptiveRNNCell(nn.Module):
         time_limit: int = 20,
         halt_epsilon: float = 0.01,
         dropout: float = 0.0,
+        halt_bias_init: float = 1.0,
     ):
         super().__init__()
         self.input_size = input_size
@@ -39,8 +40,8 @@ class AdaptiveRNNCell(nn.Module):
         self.rnn_cell = nn.GRUCell(input_size + 1, hidden_size)
         
         self.halting_layer = nn.Linear(hidden_size, 1)
-        # Bias를 1로 초기화
-        self.halting_layer.bias.data.fill_(1.0)
+        # halting unit bias 초기화 (CLI에서 조절 가능)
+        self.halting_layer.bias.data.fill_(halt_bias_init)
 
     def forward(self, input_tensor: torch.Tensor, hidden: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         batch_size = input_tensor.size(0)
@@ -159,6 +160,7 @@ class ACTPuzzleSolver(pl.LightningModule):
         focus_token_id: int = -1,
         model_type: str = "act_rnn",
         disable_ponder_cost: bool = False,
+        rnn_halt_bias: float = 1.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -171,10 +173,11 @@ class ACTPuzzleSolver(pl.LightningModule):
         
         # 위에서 정의한 ACT Cell 사용
         self.cell = AdaptiveRNNCell(
-            input_size=hidden_size, 
+            input_size=hidden_size,
             hidden_size=hidden_size,
             time_penalty=time_penalty,
-            time_limit=time_limit
+            time_limit=time_limit,
+            halt_bias_init=rnn_halt_bias,
         )
         
         self.decoder = nn.Linear(hidden_size, seq_len * vocab_size)

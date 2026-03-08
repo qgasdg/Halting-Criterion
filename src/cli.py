@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     act_group.add_argument("--time_penalty_start", type=float, default=0.0)
     act_group.add_argument("--time_penalty_warmup_steps", type=int, default=0)
     act_group.add_argument("--time_limit", type=int, default=16)
+    act_group.add_argument("--rnn_halt_bias", type=float, default=1.0)
 
     ut_group = parser.add_argument_group("Universal Transformer options")
     ut_group.add_argument("--ut_embedding_size", type=int, default=64)
@@ -49,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     ut_group.add_argument("--ut_max_hops", type=int, default=6)
     ut_group.add_argument("--ut_act", action="store_true")
     ut_group.add_argument("--ut_act_loss_weight", type=float, default=0.001)
+    ut_group.add_argument("--ut_halt_bias", type=float, default=-1.0)
 
     toy_group = parser.add_argument_group("Toy task options")
     toy_group.add_argument("--bits", type=int, default=16)

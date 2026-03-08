@@ -36,6 +36,8 @@ def build_model(args, meta, focus_token_id):
             near_ood_bits=args.parity_near_ood_bits,
             ood_bits=args.parity_ood_bits,
             halt_warmup_steps=args.halt_warmup_steps,
+            rnn_halt_bias=args.rnn_halt_bias,
+            ut_halt_bias=args.ut_halt_bias,
         )
 
     if args.task == "addition":
@@ -59,6 +61,8 @@ def build_model(args, meta, focus_token_id):
             val_size=args.toy_val_size,
             eval_seed=args.toy_eval_seed,
             halt_warmup_steps=args.halt_warmup_steps,
+            rnn_halt_bias=args.rnn_halt_bias,
+            ut_halt_bias=args.ut_halt_bias,
         )
 
     common_model_kwargs = dict(
@@ -84,6 +88,7 @@ def build_model(args, meta, focus_token_id):
             ut_act=args.ut_act,
             act_loss_weight=args.ut_act_loss_weight,
             disable_ponder_cost=args.disable_ponder_cost,
+            ut_halt_bias=args.ut_halt_bias,
             **common_model_kwargs,
         )
 
@@ -94,5 +99,6 @@ def build_model(args, meta, focus_token_id):
         time_penalty_warmup_steps=args.time_penalty_warmup_steps,
         time_limit=args.time_limit,
         disable_ponder_cost=args.disable_ponder_cost,
+        rnn_halt_bias=args.rnn_halt_bias,
         **common_model_kwargs,
     )

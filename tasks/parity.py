@@ -235,8 +235,7 @@ class ParityModel(pl.LightningModule):
         sequences, targets = batch
         logits, ponder_cost, steps = self(sequences)
         cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
-        effective_ponder = torch.zeros_like(ponder_cost) if self.hparams.disable_ponder_cost else ponder_cost
-        loss = cls_loss + effective_ponder
+        loss = cls_loss if self.hparams.disable_ponder_cost else cls_loss + ponder_cost
 
         with torch.no_grad():
             accuracy = (logits > 0).eq(targets > 0.5).float().mean()
@@ -247,7 +246,6 @@ class ParityModel(pl.LightningModule):
                 "train/loss_total": loss,
                 "train/loss_classification": cls_loss,
                 "train/loss_ponder": ponder_cost,
-                "train/loss_ponder_effective": effective_ponder,
                 "train/accuracy": accuracy,
                 "train/steps": mean_steps,
                 "train/ponder_steps": mean_steps,

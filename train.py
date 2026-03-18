@@ -1,5 +1,6 @@
 import pytorch_lightning as pl
 import torch
+from pathlib import Path
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks import StochasticWeightAveraging
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
@@ -34,6 +35,19 @@ def build_loggers(args):
     return loggers
 
 
+def resolve_checkpoint_dir(args, loggers) -> str:
+    if not args.wandb:
+        return f"{args.default_root_dir}/checkpoints"
+
+    wandb_logger = next((logger for logger in loggers if isinstance(logger, WandbLogger)), None)
+    if wandb_logger is None:
+        return f"{args.default_root_dir}/checkpoints"
+
+    # wandb run files are usually written into: wandb/run-*/files
+    run_dir = Path(wandb_logger.experiment.dir).parent
+    return str(run_dir / "checkpoints")
+
+
 def main():
     args = parse_args()
 
@@ -50,8 +64,11 @@ def main():
         focus_token_id = get_focus_token_id(args.task)
         model = build_model(args, train_dataset.meta, focus_token_id)
 
+    loggers = build_loggers(args)
+    checkpoint_dir = resolve_checkpoint_dir(args, loggers)
+
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{args.default_root_dir}/checkpoints",
+        dirpath=checkpoint_dir,
         filename="epoch{epoch:03d}-step{step}",
         save_last=True,
         save_top_k=-1,
@@ -68,8 +85,6 @@ def main():
                 avg_fn=get_ema_avg_fn(args.ema_decay),
             )
         )
-
-    loggers = build_loggers(args)
 
     if args.task == "parity":
         trainer = pl.Trainer(

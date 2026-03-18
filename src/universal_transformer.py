@@ -172,7 +172,7 @@ class EncoderLayer(nn.Module):
 
 
 class ACTBasic(nn.Module):
-    def __init__(self, hidden_size: int, halt_epsilon: float = 0.1, halt_bias_init: float = 0.1):
+    def __init__(self, hidden_size: int, halt_epsilon: float = 0.01, halt_bias_init: float = 0.1):
         super().__init__()
         self.p = nn.Linear(hidden_size, 1)
         self.p.bias.data.fill_(halt_bias_init)

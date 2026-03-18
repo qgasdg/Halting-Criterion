@@ -51,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     ut_group.add_argument("--ut_act", action="store_true")
     ut_group.add_argument("--ut_act_loss_weight", type=float, default=0.001)
     ut_group.add_argument("--ut_halt_bias", type=float, default=0.1)
+    ut_group.add_argument(
+        "--ut_attention_mode",
+        type=str,
+        default="auto",
+        choices=["auto", "full", "causal"],
+    )
 
     toy_group = parser.add_argument_group("Toy task options")
     toy_group.add_argument("--bits", type=int, default=16)

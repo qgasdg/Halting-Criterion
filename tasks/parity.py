@@ -9,9 +9,12 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_info
 
 from src.models import AdaptiveRNNCell
+from src.ut_task_policy import get_ut_task_policy
+from src.universal_transformer import _summarize_n_updates
 from src.universal_transformer import UniversalTransformerEncoder
 
 
@@ -97,6 +100,7 @@ class ParityModel(pl.LightningModule):
         halt_warmup_steps: int = 0,
         rnn_halt_bias: float = 0.1,
         ut_halt_bias: float = 0.1,
+        ut_attention_mode: str = "auto",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -123,6 +127,10 @@ class ParityModel(pl.LightningModule):
             )
             self.output_layer = torch.nn.Linear(hidden_size, 1)
         else:
+            task_policy = get_ut_task_policy("parity")
+            resolved_attention_mode = (
+                task_policy.attention_mode if ut_attention_mode == "auto" else ut_attention_mode
+            )
             self.input_proj = torch.nn.Linear(1, hidden_size)
             self.encoder = UniversalTransformerEncoder(
                 embedding_size=hidden_size,
@@ -135,6 +143,7 @@ class ParityModel(pl.LightningModule):
                 max_length=max(bits, near_bits, far_bits),
                 act=ut_act,
                 halt_bias_init=ut_halt_bias,
+                attention_mode=resolved_attention_mode,
             )
             self.output_layer = torch.nn.Linear(hidden_size, 1)
 
@@ -177,6 +186,22 @@ class ParityModel(pl.LightningModule):
         should_freeze = self.global_step < self.hparams.halt_warmup_steps
         self._set_halting_frozen(should_freeze)
 
+    def _maybe_log_n_updates_histogram(self, split: str, histogram: torch.Tensor) -> None:
+        if not isinstance(self.logger, WandbLogger):
+            return
+        experiment = getattr(self.logger, "experiment", None)
+        if experiment is None or not hasattr(experiment, "log"):
+            return
+        try:
+            import wandb
+        except ImportError:
+            return
+        values = torch.arange(1, histogram.numel() + 1, device=histogram.device)
+        repeated = torch.repeat_interleave(values, histogram.to(torch.long).cpu())
+        if repeated.numel() == 0:
+            return
+        experiment.log({f"{split}/n_updates_hist": wandb.Histogram(repeated.numpy())}, commit=False)
+
     def forward(self, binary_sequence: torch.Tensor):
         if self.model_type == "act_rnn":
             batch_size, seq_len, _ = binary_sequence.shape
@@ -196,7 +221,7 @@ class ParityModel(pl.LightningModule):
             ponder_cost = torch.stack(token_ponder_costs).mean()
             steps = torch.stack(token_steps, dim=1).mean(dim=1)
             logits = self.output_layer(hidden).squeeze(1)
-            return logits, ponder_cost, steps
+            return logits, ponder_cost, steps, None
 
         embedded = self.input_proj(binary_sequence)
         states, act_info = self.encoder(embedded)
@@ -205,15 +230,30 @@ class ParityModel(pl.LightningModule):
         if act_info is None:
             ponder_cost = torch.tensor(0.0, device=binary_sequence.device)
             steps = torch.full((binary_sequence.size(0),), float(self.hparams.time_limit), device=binary_sequence.device)
+            act_stats = {
+                "mean_steps": steps.float().mean(),
+                "steps_p50": torch.tensor(float(self.hparams.time_limit), device=binary_sequence.device),
+                "steps_p90": torch.tensor(float(self.hparams.time_limit), device=binary_sequence.device),
+                "forced_halt_ratio": torch.tensor(0.0, device=binary_sequence.device),
+                "n_updates_histogram": torch.zeros(self.hparams.time_limit, device=binary_sequence.device),
+            }
         else:
-            remainders, n_updates = act_info
+            remainders, n_updates, forced_halt_ratio = act_info
             ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
             steps = n_updates.mean(dim=1)
-        return logits, ponder_cost, steps
+            update_summary = _summarize_n_updates(n_updates, self.hparams.time_limit)
+            act_stats = {
+                "mean_steps": update_summary["mean_steps"],
+                "steps_p50": update_summary["steps_p50"],
+                "steps_p90": update_summary["steps_p90"],
+                "forced_halt_ratio": forced_halt_ratio,
+                "n_updates_histogram": update_summary["histogram"],
+            }
+        return logits, ponder_cost, steps, act_stats
 
     def _shared_eval_step(self, batch, stage: str):
         sequences, targets = batch
-        logits, ponder_cost, steps = self(sequences)
+        logits, ponder_cost, steps, act_stats = self(sequences)
         cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
 
         accuracy = (logits > 0).eq(targets > 0.5).float().mean()
@@ -230,10 +270,22 @@ class ParityModel(pl.LightningModule):
             on_step=False,
             on_epoch=True,
         )
+        if act_stats is not None:
+            self.log_dict(
+                {
+                    f"{stage}/mean_steps": act_stats["mean_steps"],
+                    f"{stage}/steps_p50": act_stats["steps_p50"],
+                    f"{stage}/steps_p90": act_stats["steps_p90"],
+                    f"{stage}/forced_halt_ratio": act_stats["forced_halt_ratio"],
+                },
+                on_step=False,
+                on_epoch=True,
+            )
+            self._maybe_log_n_updates_histogram(stage, act_stats["n_updates_histogram"])
 
     def training_step(self, batch, _):
         sequences, targets = batch
-        logits, ponder_cost, steps = self(sequences)
+        logits, ponder_cost, steps, act_stats = self(sequences)
         cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
         loss = cls_loss if self.hparams.disable_ponder_cost else cls_loss + ponder_cost
 
@@ -252,6 +304,17 @@ class ParityModel(pl.LightningModule):
             },
             prog_bar=True,
         )
+        if act_stats is not None:
+            self.log_dict(
+                {
+                    "train/mean_steps": act_stats["mean_steps"],
+                    "train/steps_p50": act_stats["steps_p50"],
+                    "train/steps_p90": act_stats["steps_p90"],
+                    "train/forced_halt_ratio": act_stats["forced_halt_ratio"],
+                },
+                prog_bar=False,
+            )
+            self._maybe_log_n_updates_histogram("train", act_stats["n_updates_histogram"])
         return loss
 
     def validation_step(self, batch, _):
@@ -311,6 +374,7 @@ def main() -> None:
     parser.add_argument("--ut_key_depth", type=int, default=64)
     parser.add_argument("--ut_value_depth", type=int, default=64)
     parser.add_argument("--ut_filter_size", type=int, default=128)
+    parser.add_argument("--ut_attention_mode", type=str, default="auto", choices=["auto", "full", "causal"])
     parser.add_argument("--val_size", type=int, default=10000)
     parser.add_argument("--test_size", type=int, default=50000)
     parser.add_argument("--eval_seed", type=int, default=1234)
@@ -344,6 +408,7 @@ def main() -> None:
         near_ood_bits=args.near_ood_bits,
         ood_bits=args.ood_bits,
         halt_warmup_steps=args.halt_warmup_steps,
+        ut_attention_mode=args.ut_attention_mode,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",

@@ -11,9 +11,12 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_info
 
 from src.models import AdaptiveRNNCell
+from src.ut_task_policy import get_ut_task_policy
+from src.universal_transformer import _summarize_n_updates
 from src.universal_transformer import UniversalTransformerEncoder
 
 
@@ -141,6 +144,7 @@ class AdditionModel(pl.LightningModule):
         halt_warmup_steps: int = 0,
         rnn_halt_bias: float = 0.1,
         ut_halt_bias: float = 0.1,
+        ut_attention_mode: str = "auto",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -160,6 +164,10 @@ class AdditionModel(pl.LightningModule):
                 halt_bias_init=rnn_halt_bias,
             )
         else:
+            task_policy = get_ut_task_policy("addition")
+            resolved_attention_mode = (
+                task_policy.attention_mode if ut_attention_mode == "auto" else ut_attention_mode
+            )
             self.input_proj = torch.nn.Linear(self.dataset.feature_size, hidden_size)
             self.encoder = UniversalTransformerEncoder(
                 embedding_size=hidden_size,
@@ -172,6 +180,7 @@ class AdditionModel(pl.LightningModule):
                 max_length=sequence_length,
                 act=ut_act,
                 halt_bias_init=ut_halt_bias,
+                attention_mode=resolved_attention_mode,
             )
 
         self._halting_frozen = False
@@ -213,7 +222,24 @@ class AdditionModel(pl.LightningModule):
         should_freeze = self.global_step < self.hparams.halt_warmup_steps
         self._set_halting_frozen(should_freeze)
 
-    def forward(self, number_sequence: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _maybe_log_n_updates_histogram(self, split: str, histogram: torch.Tensor) -> None:
+        if not isinstance(self.logger, WandbLogger):
+            return
+        experiment = getattr(self.logger, "experiment", None)
+        if experiment is None or not hasattr(experiment, "log"):
+            return
+        try:
+            import wandb
+        except ImportError:
+            return
+        values = torch.arange(1, histogram.numel() + 1, device=histogram.device)
+        repeated = torch.repeat_interleave(values, histogram.to(torch.long).cpu())
+        if repeated.numel() == 0:
+            return
+        experiment.log({f"{split}/n_updates_hist": wandb.Histogram(repeated.numpy())}, commit=False)
+
+    def forward(self, number_sequence: torch.Tensor):
+        act_stats = None
         if self.model_type == "act_rnn":
             hidden = None
             hidden_seq = []
@@ -237,9 +263,25 @@ class AdditionModel(pl.LightningModule):
                 ponder_cost = torch.tensor(0.0, device=number_sequence.device)
                 mean_steps = torch.tensor(float(self.hparams.time_limit), device=number_sequence.device)
             else:
-                remainders, n_updates = act_info
+                remainders, n_updates, forced_halt_ratio = act_info
                 ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
                 mean_steps = n_updates.mean()
+                update_summary = _summarize_n_updates(n_updates, self.hparams.time_limit)
+                act_stats = {
+                    "mean_steps": update_summary["mean_steps"],
+                    "steps_p50": update_summary["steps_p50"],
+                    "steps_p90": update_summary["steps_p90"],
+                    "forced_halt_ratio": forced_halt_ratio,
+                    "n_updates_histogram": update_summary["histogram"],
+                }
+            if act_info is None:
+                act_stats = {
+                    "mean_steps": mean_steps,
+                    "steps_p50": mean_steps,
+                    "steps_p90": mean_steps,
+                    "forced_halt_ratio": torch.tensor(0.0, device=number_sequence.device),
+                    "n_updates_histogram": torch.zeros(self.hparams.time_limit, device=number_sequence.device),
+                }
 
         logits = self.output_layer(hidden_stacked)
         logits = logits.view(
@@ -248,11 +290,11 @@ class AdditionModel(pl.LightningModule):
             self.dataset.target_size,
             AdditionDataset.NUM_CLASSES,
         )
-        return logits, ponder_cost, mean_steps
+        return logits, ponder_cost, mean_steps, act_stats
 
     def _shared_eval_step(self, batch, stage: str):
         numbers, sums = batch
-        logits, ponder_cost, mean_steps = self(numbers)
+        logits, ponder_cost, mean_steps, act_stats = self(numbers)
         cls_loss = F.cross_entropy(
             logits.view(-1, AdditionDataset.NUM_CLASSES),
             sums.view(-1),
@@ -277,10 +319,22 @@ class AdditionModel(pl.LightningModule):
             on_step=False,
             on_epoch=True,
         )
+        if act_stats is not None:
+            self.log_dict(
+                {
+                    f"{stage}/mean_steps": act_stats["mean_steps"],
+                    f"{stage}/steps_p50": act_stats["steps_p50"],
+                    f"{stage}/steps_p90": act_stats["steps_p90"],
+                    f"{stage}/forced_halt_ratio": act_stats["forced_halt_ratio"],
+                },
+                on_step=False,
+                on_epoch=True,
+            )
+            self._maybe_log_n_updates_histogram(stage, act_stats["n_updates_histogram"])
 
     def training_step(self, batch, _):
         numbers, sums = batch
-        logits, ponder_cost, mean_steps = self(numbers)
+        logits, ponder_cost, mean_steps, act_stats = self(numbers)
 
         cls_loss = F.cross_entropy(
             logits.view(-1, AdditionDataset.NUM_CLASSES),
@@ -307,6 +361,17 @@ class AdditionModel(pl.LightningModule):
             },
             prog_bar=True,
         )
+        if act_stats is not None:
+            self.log_dict(
+                {
+                    "train/mean_steps": act_stats["mean_steps"],
+                    "train/steps_p50": act_stats["steps_p50"],
+                    "train/steps_p90": act_stats["steps_p90"],
+                    "train/forced_halt_ratio": act_stats["forced_halt_ratio"],
+                },
+                prog_bar=False,
+            )
+            self._maybe_log_n_updates_histogram("train", act_stats["n_updates_histogram"])
         return loss
 
     def validation_step(self, batch, _):
@@ -353,6 +418,7 @@ def main() -> None:
     parser.add_argument("--ut_key_depth", type=int, default=128)
     parser.add_argument("--ut_value_depth", type=int, default=128)
     parser.add_argument("--ut_filter_size", type=int, default=256)
+    parser.add_argument("--ut_attention_mode", type=str, default="auto", choices=["auto", "full", "causal"])
     parser.add_argument("--val_size", type=int, default=10000)
     parser.add_argument("--eval_seed", type=int, default=1234)
     parser.add_argument("--default_root_dir", type=str, default="runs")
@@ -381,6 +447,7 @@ def main() -> None:
         val_size=args.val_size,
         eval_seed=args.eval_seed,
         halt_warmup_steps=args.halt_warmup_steps,
+        ut_attention_mode=args.ut_attention_mode,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",

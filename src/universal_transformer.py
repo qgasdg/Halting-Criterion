@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from pytorch_lightning.loggers import WandbLogger
 
 
 class LayerNorm(nn.Module):
@@ -42,6 +43,28 @@ def _gen_timing_signal(
     return signal.unsqueeze(0)
 
 
+def _summarize_n_updates(n_updates: torch.Tensor, max_hops: int) -> Dict[str, torch.Tensor]:
+    flat_updates = n_updates.float().reshape(-1)
+    if flat_updates.numel() == 0:
+        zero = torch.tensor(0.0, device=n_updates.device)
+        histogram = torch.zeros(max_hops, device=n_updates.device)
+        return {
+            "mean_steps": zero,
+            "steps_p50": zero,
+            "steps_p90": zero,
+            "histogram": histogram,
+        }
+
+    bin_indices = flat_updates.clamp(min=1, max=max_hops).to(torch.long) - 1
+    histogram = torch.bincount(bin_indices, minlength=max_hops).float()
+    return {
+        "mean_steps": flat_updates.mean(),
+        "steps_p50": torch.quantile(flat_updates, 0.5),
+        "steps_p90": torch.quantile(flat_updates, 0.9),
+        "histogram": histogram,
+    }
+
+
 class MultiHeadAttention(nn.Module):
     def __init__(
         self,
@@ -75,12 +98,25 @@ class MultiHeadAttention(nn.Module):
         bsz, _, seq, depth = x.shape
         return x.permute(0, 2, 1, 3).contiguous().view(bsz, seq, depth * self.num_heads)
 
-    def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        queries: torch.Tensor,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         queries = self._split_heads(self.query_linear(queries))
         keys = self._split_heads(self.key_linear(keys))
         values = self._split_heads(self.value_linear(values))
 
         logits = torch.matmul(queries * self.query_scale, keys.transpose(-1, -2))
+        if attention_mask is not None:
+            mask = attention_mask.to(device=logits.device, dtype=torch.bool)
+            if mask.dim() == 2:
+                mask = mask.unsqueeze(0).unsqueeze(0)
+            elif mask.dim() == 3:
+                mask = mask.unsqueeze(1)
+            logits = logits.masked_fill(mask, torch.finfo(logits.dtype).min)
         weights = self.dropout(torch.softmax(logits, dim=-1))
         context = torch.matmul(weights, values)
         return self.output_linear(self._merge_heads(context))
@@ -126,10 +162,10 @@ class EncoderLayer(nn.Module):
         self.layer_norm_ffn = LayerNorm(hidden_size)
         self.dropout = nn.Dropout(layer_dropout)
 
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = inputs
         x_norm = self.layer_norm_mha(x)
-        y = self.multi_head_attention(x_norm, x_norm, x_norm)
+        y = self.multi_head_attention(x_norm, x_norm, x_norm, attention_mask=attention_mask)
         x = self.dropout(x + y)
         y = self.positionwise_feed_forward(self.layer_norm_ffn(x))
         return self.dropout(x + y)
@@ -150,7 +186,8 @@ class ACTBasic(nn.Module):
         time_signal: torch.Tensor,
         position_signal: torch.Tensor,
         max_hops: int,
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         bsz, seq_len, _ = state.shape
         device = state.device
 
@@ -177,10 +214,11 @@ class ACTBasic(nn.Module):
             n_updates = n_updates + still_running + new_halted
 
             update_weights = p * still_running + new_halted * remainders
-            state = transform(state)
+            state = transform(state, attention_mask=attention_mask)
             previous_state = state * update_weights.unsqueeze(-1) + previous_state * (1.0 - update_weights.unsqueeze(-1))
 
-        return previous_state, (remainders, n_updates)
+        forced_halt_ratio = (halting_probability < self.threshold).float().mean()
+        return previous_state, (remainders, n_updates, forced_halt_ratio)
 
 
 class UniversalTransformerEncoder(nn.Module):
@@ -200,10 +238,12 @@ class UniversalTransformerEncoder(nn.Module):
         relu_dropout: float = 0.0,
         act: bool = False,
         halt_bias_init: float = 0.1,
+        attention_mode: str = "full",
     ):
         super().__init__()
         self.num_layers = num_layers
         self.act = act
+        self.attention_mode = attention_mode
 
         self.timing_signal = _gen_timing_signal(max_length, hidden_size)
         self.position_signal = _gen_timing_signal(num_layers, hidden_size)
@@ -226,17 +266,37 @@ class UniversalTransformerEncoder(nn.Module):
         if self.act:
             self.act_fn = ACTBasic(hidden_size, halt_bias_init=halt_bias_init)
 
-    def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+    def _resolve_attention_mask(self, inputs: torch.Tensor, attention_mask: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        if attention_mask is not None:
+            return attention_mask.to(device=inputs.device, dtype=torch.bool)
+        if self.attention_mode != "causal":
+            return None
+        seq_len = inputs.size(1)
+        return torch.triu(torch.ones(seq_len, seq_len, device=inputs.device, dtype=torch.bool), diagonal=1)
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
         x = self.embedding_proj(self.input_dropout(inputs))
+        attention_mask = self._resolve_attention_mask(x, attention_mask)
 
         if self.act:
-            x, act_info = self.act_fn(x, self.enc, self.timing_signal, self.position_signal, self.num_layers)
+            x, act_info = self.act_fn(
+                x,
+                self.enc,
+                self.timing_signal,
+                self.position_signal,
+                self.num_layers,
+                attention_mask=attention_mask,
+            )
             return self.layer_norm(x), act_info
 
         for layer_idx in range(self.num_layers):
             x = x + self.timing_signal[:, : inputs.size(1), :].to(x.device)
             x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, inputs.size(1), -1).to(x.device)
-            x = self.enc(x)
+            x = self.enc(x, attention_mask=attention_mask)
 
         return self.layer_norm(x), None
 
@@ -263,6 +323,7 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
         focus_token_id: int = -1,
         model_type: str = "universal_transformer",
         ut_halt_bias: float = 0.1,
+        ut_attention_mode: str = "full",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -279,11 +340,28 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
             max_length=seq_len,
             act=ut_act,
             halt_bias_init=ut_halt_bias,
+            attention_mode=ut_attention_mode,
         )
         self.decoder = nn.Linear(hidden_size, vocab_size)
 
         self.task_name = task_name
         self.focus_token_id = focus_token_id if focus_token_id >= 0 else None
+
+    def _maybe_log_n_updates_histogram(self, split: str, histogram: torch.Tensor) -> None:
+        if not isinstance(self.logger, WandbLogger):
+            return
+        experiment = getattr(self.logger, "experiment", None)
+        if experiment is None or not hasattr(experiment, "log"):
+            return
+        try:
+            import wandb
+        except ImportError:
+            return
+        values = torch.arange(1, histogram.numel() + 1, device=histogram.device)
+        repeated = torch.repeat_interleave(values, histogram.to(torch.long).cpu())
+        if repeated.numel() == 0:
+            return
+        experiment.log({f"{split}/n_updates_hist": wandb.Histogram(repeated.numpy())}, commit=False)
 
     def forward(self, x: torch.Tensor):
         embed = self.embedding(x)
@@ -292,22 +370,33 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
 
         act_loss = torch.tensor(0.0, device=x.device)
         if act_info is not None:
-            remainders, n_updates = act_info
+            remainders, n_updates, forced_halt_ratio = act_info
             act_loss = self.hparams.act_loss_weight * (remainders + n_updates).mean()
+            update_summary = _summarize_n_updates(n_updates, self.hparams.max_hops)
             steps = n_updates.mean(dim=1)
             stats = {
-                "steps_p50": torch.quantile(n_updates, 0.5),
-                "steps_p90": torch.quantile(n_updates, 0.9),
+                "mean_steps": update_summary["mean_steps"],
+                "steps_p50": update_summary["steps_p50"],
+                "steps_p90": update_summary["steps_p90"],
+                "forced_halt_ratio": forced_halt_ratio,
                 "remainder_mean": remainders.mean(),
                 "remainder_std": remainders.std(unbiased=False),
+                "n_updates_histogram": update_summary["histogram"],
             }
         else:
+            default_steps = torch.tensor(float(self.hparams.max_hops), device=x.device)
+            histogram = torch.zeros(self.hparams.max_hops, device=x.device)
+            if histogram.numel() > 0:
+                histogram[-1] = x.size(0) * x.size(1)
             steps = torch.full((x.size(0),), float(self.hparams.max_hops), device=x.device)
             stats = {
-                "steps_p50": torch.tensor(float(self.hparams.max_hops), device=x.device),
-                "steps_p90": torch.tensor(float(self.hparams.max_hops), device=x.device),
+                "mean_steps": default_steps,
+                "steps_p50": default_steps,
+                "steps_p90": default_steps,
+                "forced_halt_ratio": torch.tensor(0.0, device=x.device),
                 "remainder_mean": torch.tensor(0.0, device=x.device),
                 "remainder_std": torch.tensor(0.0, device=x.device),
+                "n_updates_histogram": histogram,
             }
 
         return logits, act_loss, steps, stats
@@ -335,16 +424,18 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
             self.log("focus_precision", focus_metrics["precision"])
             self.log("focus_recall", focus_metrics["recall"])
             self.log("focus_f1", focus_metrics["f1"], prog_bar=True)
-        self.log("steps", steps.float().mean(), prog_bar=True)
+        self.log("steps", act_stats["mean_steps"], prog_bar=True)
         self.log("steps_p50", act_stats["steps_p50"])
         self.log("steps_p90", act_stats["steps_p90"])
+        self.log("forced_halt_ratio", act_stats["forced_halt_ratio"])
         self.log("remainder_mean", act_stats["remainder_mean"])
         self.log("remainder_std", act_stats["remainder_std"])
+        self._maybe_log_n_updates_histogram("train", act_stats["n_updates_histogram"])
         return loss
 
     def test_step(self, batch, batch_idx):
         x, y = batch
-        logits, _, steps, act_stats = self.forward(x)
+        logits, _, _, act_stats = self.forward(x)
         preds = torch.argmax(logits, dim=-1)
 
         acc_puzzle = (preds == y).all(dim=1).float().mean()
@@ -357,11 +448,13 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
             self.log("test_focus_precision", focus_metrics["precision"])
             self.log("test_focus_recall", focus_metrics["recall"])
             self.log("test_focus_f1", focus_metrics["f1"])
-        self.log("test_steps", steps.float().mean())
+        self.log("test_steps", act_stats["mean_steps"])
         self.log("test_steps_p50", act_stats["steps_p50"])
         self.log("test_steps_p90", act_stats["steps_p90"])
+        self.log("test_forced_halt_ratio", act_stats["forced_halt_ratio"])
         self.log("test_remainder_mean", act_stats["remainder_mean"])
         self.log("test_remainder_std", act_stats["remainder_std"])
+        self._maybe_log_n_updates_histogram("test", act_stats["n_updates_histogram"])
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -422,5 +515,4 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
         precision = tp / (tp + fp + 1e-8)
         recall = tp / (tp + fn + 1e-8)
         f1 = 2 * precision * recall / (precision + recall + 1e-8)
-
         return {"precision": precision, "recall": recall, "f1": f1}

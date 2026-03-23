@@ -3,6 +3,7 @@ from src.ut_task_policy import get_ut_task_policy
 from src.universal_transformer import UniversalTransformerPuzzleSolver
 from tasks.addition import AdditionModel
 from tasks.parity import ParityModel
+from tasks.string_addition import StringAdditionModel
 
 MAZE_CHARSET = "# SGo"
 
@@ -71,6 +72,18 @@ def build_model(args, meta, focus_token_id):
             rnn_halt_bias=args.rnn_halt_bias,
             ut_halt_bias=args.ut_halt_bias,
             ut_attention_mode=ut_attention_mode,
+        )
+
+    if args.task == "string_addition":
+        return StringAdditionModel(
+            sequence_length=args.sequence_length,
+            max_digits=args.max_digits,
+            hidden_size=args.hidden_size,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            data_workers=args.data_workers,
+            val_size=args.toy_val_size,
+            eval_seed=args.toy_eval_seed,
         )
 
     common_model_kwargs = dict(

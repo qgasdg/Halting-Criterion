@@ -23,6 +23,12 @@ _TASK_POLICIES = {
         encoder_variant="standard",
         readout_hint="per_token",
     ),
+    "string_addition": UTTaskPolicy(
+        attention_mode="causal",
+        input_layout="sequence",
+        encoder_variant="standard",
+        readout_hint="per_token",
+    ),
     "parity": UTTaskPolicy(
         attention_mode="full",
         input_layout="sequence",

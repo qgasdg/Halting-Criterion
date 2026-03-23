@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         type=str,
         default="sudoku",
-        choices=["sudoku", "maze", "parity", "addition"],
+        choices=["sudoku", "maze", "parity", "addition", "string_addition"],
     )
     parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
     parser.add_argument("--default_root_dir", type=str, default="runs")

@@ -51,7 +51,7 @@ def resolve_checkpoint_dir(args, loggers) -> str:
 def main():
     args = parse_args()
 
-    if args.task in {"parity", "addition"}:
+    if args.task in {"parity", "addition", "string_addition"}:
         model = build_model(args, meta=None, focus_token_id=None)
     else:
         if args.data_dir is None:
@@ -98,7 +98,7 @@ def main():
         )
         trainer.fit(model, ckpt_path=args.resume_ckpt)
         trainer.test(model, ckpt_path="last", weights_only=False)
-    elif args.task == "addition":
+    elif args.task in {"addition", "string_addition"}:
         trainer = pl.Trainer(
             max_steps=args.max_steps,
             accelerator="auto",

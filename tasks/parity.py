@@ -92,6 +92,7 @@ class ParityModel(pl.LightningModule):
         ut_key_depth: int,
         ut_value_depth: int,
         ut_filter_size: int,
+        ut_max_hops: int = 6,
         val_size: int = 10000,
         test_size: int = 50000,
         eval_seed: int = 1234,
@@ -135,7 +136,7 @@ class ParityModel(pl.LightningModule):
             self.encoder = UniversalTransformerEncoder(
                 embedding_size=hidden_size,
                 hidden_size=hidden_size,
-                num_layers=time_limit,
+                num_layers=ut_max_hops,
                 num_heads=ut_heads,
                 total_key_depth=ut_key_depth,
                 total_value_depth=ut_value_depth,
@@ -229,19 +230,19 @@ class ParityModel(pl.LightningModule):
         logits = self.output_layer(pooled).squeeze(1)
         if act_info is None:
             ponder_cost = torch.tensor(0.0, device=binary_sequence.device)
-            steps = torch.full((binary_sequence.size(0),), float(self.hparams.time_limit), device=binary_sequence.device)
+            steps = torch.full((binary_sequence.size(0),), float(self.hparams.ut_max_hops), device=binary_sequence.device)
             act_stats = {
                 "mean_steps": steps.float().mean(),
-                "steps_p50": torch.tensor(float(self.hparams.time_limit), device=binary_sequence.device),
-                "steps_p90": torch.tensor(float(self.hparams.time_limit), device=binary_sequence.device),
+                "steps_p50": torch.tensor(float(self.hparams.ut_max_hops), device=binary_sequence.device),
+                "steps_p90": torch.tensor(float(self.hparams.ut_max_hops), device=binary_sequence.device),
                 "forced_halt_ratio": torch.tensor(0.0, device=binary_sequence.device),
-                "n_updates_histogram": torch.zeros(self.hparams.time_limit, device=binary_sequence.device),
+                "n_updates_histogram": torch.zeros(self.hparams.ut_max_hops, device=binary_sequence.device),
             }
         else:
             remainders, n_updates, forced_halt_ratio = act_info
             ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
             steps = n_updates.mean(dim=1)
-            update_summary = _summarize_n_updates(n_updates, self.hparams.time_limit)
+            update_summary = _summarize_n_updates(n_updates, self.hparams.ut_max_hops)
             act_stats = {
                 "mean_steps": update_summary["mean_steps"],
                 "steps_p50": update_summary["steps_p50"],

@@ -3,6 +3,7 @@
 
 import random
 from dataclasses import dataclass
+from functools import partial
 from typing import Dict, List, Sequence, Tuple
 
 import pytorch_lightning as pl
@@ -251,6 +252,7 @@ class StringAdditionModel(pl.LightningModule):
         ut_key_depth: int,
         ut_value_depth: int,
         ut_filter_size: int,
+        ut_max_hops: int = 6,
         val_size: int = 10000,
         eval_seed: int = 1234,
         rnn_halt_bias: float = 0.1,
@@ -288,7 +290,7 @@ class StringAdditionModel(pl.LightningModule):
             self.encoder = UniversalTransformerEncoder(
                 embedding_size=hidden_size,
                 hidden_size=hidden_size,
-                num_layers=time_limit,
+                num_layers=ut_max_hops,
                 num_heads=ut_heads,
                 total_key_depth=ut_key_depth,
                 total_value_depth=ut_value_depth,
@@ -301,7 +303,7 @@ class StringAdditionModel(pl.LightningModule):
             self.decoder = UniversalTransformerDecoder(
                 embedding_size=hidden_size,
                 hidden_size=hidden_size,
-                num_layers=time_limit,
+                num_layers=ut_max_hops,
                 num_heads=ut_heads,
                 total_key_depth=ut_key_depth,
                 total_value_depth=ut_value_depth,
@@ -345,19 +347,19 @@ class StringAdditionModel(pl.LightningModule):
             states = self.decoder(decoder_embedded, memory, decoder_input_tokens, src_tokens)
             if act_info is None:
                 ponder_cost = torch.tensor(0.0, device=src_tokens.device)
-                mean_steps = torch.tensor(float(self.hparams.time_limit), device=src_tokens.device)
+                mean_steps = torch.tensor(float(self.hparams.ut_max_hops), device=src_tokens.device)
                 act_stats = {
                     "mean_steps": mean_steps,
                     "steps_p50": mean_steps,
                     "steps_p90": mean_steps,
                     "forced_halt_ratio": torch.tensor(0.0, device=src_tokens.device),
-                    "n_updates_histogram": torch.zeros(self.hparams.time_limit, device=src_tokens.device),
+                    "n_updates_histogram": torch.zeros(self.hparams.ut_max_hops, device=src_tokens.device),
                 }
             else:
                 remainders, n_updates, forced_halt_ratio = act_info
                 ponder_cost = self.hparams.ut_act_loss_weight * (remainders + n_updates).mean()
                 mean_steps = n_updates.mean()
-                summary = _summarize_n_updates(n_updates, self.hparams.time_limit)
+                summary = _summarize_n_updates(n_updates, self.hparams.ut_max_hops)
                 act_stats = {
                     "mean_steps": summary["mean_steps"],
                     "steps_p50": summary["steps_p50"],
@@ -446,7 +448,7 @@ class StringAdditionModel(pl.LightningModule):
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.data_workers,
             pin_memory=self.device.type == "cuda",
-            collate_fn=lambda batch: string_addition_collate_fn(batch, pad_id=self.tokenizer.pad_id),
+            collate_fn=partial(string_addition_collate_fn, pad_id=self.tokenizer.pad_id),
         )
 
     def val_dataloader(self):
@@ -455,5 +457,5 @@ class StringAdditionModel(pl.LightningModule):
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.data_workers,
             pin_memory=self.device.type == "cuda",
-            collate_fn=lambda batch: string_addition_collate_fn(batch, pad_id=self.tokenizer.pad_id),
+            collate_fn=partial(string_addition_collate_fn, pad_id=self.tokenizer.pad_id),
         )

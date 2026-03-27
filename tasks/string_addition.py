@@ -11,8 +11,128 @@ import torch.nn.functional as F
 from pytorch_lightning.loggers import WandbLogger
 
 from src.models import AdaptiveRNNCell
-from src.ut_task_policy import get_ut_task_policy
-from src.universal_transformer import UniversalTransformerEncoder, _summarize_n_updates
+from src.universal_transformer import (
+    LayerNorm,
+    MultiHeadAttention,
+    PositionwiseFeedForward,
+    UniversalTransformerEncoder,
+    _gen_timing_signal,
+    _summarize_n_updates,
+)
+
+
+class EncoderDecoderBlock(torch.nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        total_key_depth: int,
+        total_value_depth: int,
+        filter_size: int,
+        layer_dropout: float = 0.0,
+        attention_dropout: float = 0.0,
+        relu_dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.self_attention = MultiHeadAttention(
+            hidden_size,
+            total_key_depth,
+            total_value_depth,
+            hidden_size,
+            num_heads,
+            dropout=attention_dropout,
+        )
+        self.cross_attention = MultiHeadAttention(
+            hidden_size,
+            total_key_depth,
+            total_value_depth,
+            hidden_size,
+            num_heads,
+            dropout=attention_dropout,
+        )
+        self.positionwise_feed_forward = PositionwiseFeedForward(hidden_size, filter_size, dropout=relu_dropout)
+        self.layer_norm_self = LayerNorm(hidden_size)
+        self.layer_norm_cross = LayerNorm(hidden_size)
+        self.layer_norm_ffn = LayerNorm(hidden_size)
+        self.dropout = torch.nn.Dropout(layer_dropout)
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        memory: torch.Tensor,
+        self_attention_mask: torch.Tensor,
+        cross_attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        x = inputs
+        x_norm = self.layer_norm_self(x)
+        x = self.dropout(x + self.self_attention(x_norm, x_norm, x_norm, attention_mask=self_attention_mask))
+        x_norm = self.layer_norm_cross(x)
+        x = self.dropout(x + self.cross_attention(x_norm, memory, memory, attention_mask=cross_attention_mask))
+        x = self.dropout(x + self.positionwise_feed_forward(self.layer_norm_ffn(x)))
+        return x
+
+
+class UniversalTransformerDecoder(torch.nn.Module):
+    def __init__(
+        self,
+        embedding_size: int,
+        hidden_size: int,
+        num_layers: int,
+        num_heads: int,
+        total_key_depth: int,
+        total_value_depth: int,
+        filter_size: int,
+        max_length: int,
+        input_dropout: float = 0.0,
+        layer_dropout: float = 0.0,
+        attention_dropout: float = 0.0,
+        relu_dropout: float = 0.0,
+        pad_id: int = 0,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.pad_id = pad_id
+        self.timing_signal = _gen_timing_signal(max_length, hidden_size)
+        self.position_signal = _gen_timing_signal(num_layers, hidden_size)
+        self.embedding_proj = (
+            torch.nn.Identity() if embedding_size == hidden_size else torch.nn.Linear(embedding_size, hidden_size, bias=False)
+        )
+        self.dec = EncoderDecoderBlock(
+            hidden_size=hidden_size,
+            total_key_depth=total_key_depth or hidden_size,
+            total_value_depth=total_value_depth or hidden_size,
+            filter_size=filter_size,
+            num_heads=num_heads,
+            layer_dropout=layer_dropout,
+            attention_dropout=attention_dropout,
+            relu_dropout=relu_dropout,
+        )
+        self.input_dropout = torch.nn.Dropout(input_dropout)
+        self.layer_norm = LayerNorm(hidden_size)
+
+    def _causal_mask(self, inputs: torch.Tensor) -> torch.Tensor:
+        seq_len = inputs.size(1)
+        return torch.triu(torch.ones(seq_len, seq_len, device=inputs.device, dtype=torch.bool), diagonal=1)
+
+    def _decoder_padding_mask(self, decoder_tokens: torch.Tensor) -> torch.Tensor:
+        return decoder_tokens.eq(self.pad_id).unsqueeze(1).expand(-1, decoder_tokens.size(1), -1)
+
+    def _cross_attention_mask(self, decoder_tokens: torch.Tensor, encoder_tokens: torch.Tensor) -> torch.Tensor:
+        return encoder_tokens.eq(self.pad_id).unsqueeze(1).expand(-1, decoder_tokens.size(1), -1)
+
+    def forward(self, decoder_inputs: torch.Tensor, memory: torch.Tensor, decoder_tokens: torch.Tensor, encoder_tokens: torch.Tensor) -> torch.Tensor:
+        x = self.embedding_proj(self.input_dropout(decoder_inputs))
+        causal_mask = self._causal_mask(x).unsqueeze(0).expand(x.size(0), -1, -1)
+        decoder_padding_mask = self._decoder_padding_mask(decoder_tokens)
+        self_mask = causal_mask | decoder_padding_mask
+        cross_mask = self._cross_attention_mask(decoder_tokens, encoder_tokens)
+
+        for layer_idx in range(self.num_layers):
+            x = x + self.timing_signal[:, : x.size(1), :].to(x.device)
+            x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, x.size(1), -1).to(x.device)
+            x = self.dec(x, memory, self_attention_mask=self_mask, cross_attention_mask=cross_mask)
+
+        return self.layer_norm(x)
 
 
 @dataclass(frozen=True)
@@ -162,11 +282,9 @@ class StringAdditionModel(pl.LightningModule):
                 time_limit=time_limit,
                 halt_bias_init=rnn_halt_bias,
             )
+            self.encoder_summary = torch.nn.Linear(hidden_size, hidden_size)
         else:
-            task_policy = get_ut_task_policy("addition")
-            resolved_attention_mode = (
-                task_policy.attention_mode if ut_attention_mode == "auto" else ut_attention_mode
-            )
+            resolved_attention_mode = "full" if ut_attention_mode == "auto" else ut_attention_mode
             self.encoder = UniversalTransformerEncoder(
                 embedding_size=hidden_size,
                 hidden_size=hidden_size,
@@ -180,30 +298,51 @@ class StringAdditionModel(pl.LightningModule):
                 halt_bias_init=ut_halt_bias,
                 attention_mode=resolved_attention_mode,
             )
-
-    def _compose_teacher_forcing_stream(self, src_tokens: torch.Tensor, decoder_input_tokens: torch.Tensor) -> torch.Tensor:
-        return torch.cat([src_tokens, decoder_input_tokens], dim=1)
+            self.decoder = UniversalTransformerDecoder(
+                embedding_size=hidden_size,
+                hidden_size=hidden_size,
+                num_layers=time_limit,
+                num_heads=ut_heads,
+                total_key_depth=ut_key_depth,
+                total_value_depth=ut_value_depth,
+                filter_size=ut_filter_size,
+                max_length=max_digits + 4,
+                pad_id=self.tokenizer.pad_id,
+            )
 
     def forward(self, src_tokens: torch.Tensor, decoder_input_tokens: torch.Tensor):
-        stream_tokens = self._compose_teacher_forcing_stream(src_tokens, decoder_input_tokens)
-        embedded = self.embedding(stream_tokens)
+        src_embedded = self.embedding(src_tokens)
+        decoder_embedded = self.embedding(decoder_input_tokens)
 
         if self.model_type == "act_rnn":
-            hidden = None
-            hidden_states = []
-            ponder_costs = []
-            step_counts = []
-            for t in range(embedded.size(1)):
-                hidden, step_ponder, step_count, _ = self.rnn_cell(embedded[:, t, :], hidden)
-                hidden_states.append(hidden)
-                ponder_costs.append(step_ponder)
-                step_counts.append(step_count.float())
-            states = torch.stack(hidden_states, dim=1)
-            ponder_cost = torch.stack(ponder_costs).mean()
-            mean_steps = torch.stack(step_counts).mean()
+            encoder_hidden = None
+            encoder_ponder_costs = []
+            encoder_step_counts = []
+            for t in range(src_embedded.size(1)):
+                encoder_hidden, step_ponder, step_count, _ = self.rnn_cell(src_embedded[:, t, :], encoder_hidden)
+                encoder_ponder_costs.append(step_ponder)
+                encoder_step_counts.append(step_count.float())
+
+            context = self.encoder_summary(encoder_hidden)
+            decoder_hidden = context
+            decoder_states = []
+            decoder_ponder_costs = []
+            decoder_step_counts = []
+            for t in range(decoder_embedded.size(1)):
+                decoder_hidden, step_ponder, step_count, _ = self.rnn_cell(decoder_embedded[:, t, :], decoder_hidden)
+                decoder_states.append(decoder_hidden)
+                decoder_ponder_costs.append(step_ponder)
+                decoder_step_counts.append(step_count.float())
+
+            states = torch.stack(decoder_states, dim=1)
+            all_ponder_costs = encoder_ponder_costs + decoder_ponder_costs
+            all_step_counts = encoder_step_counts + decoder_step_counts
+            ponder_cost = torch.stack(all_ponder_costs).mean()
+            mean_steps = torch.stack(all_step_counts).mean()
             act_stats = None
         else:
-            states, act_info = self.encoder(embedded)
+            memory, act_info = self.encoder(src_embedded)
+            states = self.decoder(decoder_embedded, memory, decoder_input_tokens, src_tokens)
             if act_info is None:
                 ponder_cost = torch.tensor(0.0, device=src_tokens.device)
                 mean_steps = torch.tensor(float(self.hparams.time_limit), device=src_tokens.device)
@@ -228,8 +367,7 @@ class StringAdditionModel(pl.LightningModule):
                 }
 
         logits = self.output_layer(states)
-        pred_start = src_tokens.size(1)
-        return logits[:, pred_start:, :], ponder_cost, mean_steps, act_stats
+        return logits, ponder_cost, mean_steps, act_stats
 
     def _compute_loss(self, logits: torch.Tensor, target_tokens: torch.Tensor) -> torch.Tensor:
         return F.cross_entropy(

@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         type=str,
         default="sudoku",
-        choices=["sudoku", "maze", "parity", "addition"],
+        choices=["sudoku", "maze", "parity", "addition", "string_addition"],
     )
     parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
     parser.add_argument("--default_root_dir", type=str, default="runs")
@@ -62,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     toy_group.add_argument("--bits", type=int, default=16)
     toy_group.add_argument("--sequence_length", type=int, default=5)
     toy_group.add_argument("--max_digits", type=int, default=5)
+    toy_group.add_argument("--string_addition_max_terms", type=int, default=2)
     toy_group.add_argument("--toy_val_size", type=int, default=10000)
     toy_group.add_argument("--toy_test_size", type=int, default=50000)
     toy_group.add_argument("--toy_eval_seed", type=int, default=1234)

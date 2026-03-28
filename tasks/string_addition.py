@@ -254,6 +254,8 @@ class StringAdditionModel(pl.LightningModule):
         ut_filter_size: int,
         ut_max_hops: int = 6,
         val_size: int = 10000,
+        test_max_digits: int = 8,
+        test_size: int = 50000,
         eval_seed: int = 1234,
         rnn_halt_bias: float = 0.1,
         ut_halt_bias: float = 0.1,
@@ -269,6 +271,14 @@ class StringAdditionModel(pl.LightningModule):
             max_digits=max_digits,
             size=val_size,
             seed=eval_seed,
+            tokenizer=self.tokenizer,
+        )
+        _arch_max_digits = max(max_digits, test_max_digits)
+        self.test_dataset = FixedStringAdditionDataset(
+            max_terms=max_terms,
+            max_digits=test_max_digits,
+            size=test_size,
+            seed=eval_seed + 1,
             tokenizer=self.tokenizer,
         )
         self.model_type = model_type
@@ -295,7 +305,7 @@ class StringAdditionModel(pl.LightningModule):
                 total_key_depth=ut_key_depth,
                 total_value_depth=ut_value_depth,
                 filter_size=ut_filter_size,
-                max_length=(2 * max_terms * max_digits) + 4,
+                max_length=(2 * max_terms * _arch_max_digits) + 4,
                 act=ut_act,
                 halt_bias_init=ut_halt_bias,
                 attention_mode=resolved_attention_mode,
@@ -308,7 +318,7 @@ class StringAdditionModel(pl.LightningModule):
                 total_key_depth=ut_key_depth,
                 total_value_depth=ut_value_depth,
                 filter_size=ut_filter_size,
-                max_length=max_digits + 4,
+                max_length=_arch_max_digits + 4,
                 pad_id=self.tokenizer.pad_id,
             )
 
@@ -422,22 +432,29 @@ class StringAdditionModel(pl.LightningModule):
 
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def _shared_eval_step(self, batch, stage: str):
         logits, ponder_cost, mean_steps, act_stats = self(batch["src_tokens"], batch["decoder_input_tokens"])
         loss = self._compute_loss(logits, batch["target_tokens"])
         char_acc, seq_acc = self._metric_from_logits(logits, batch["target_tokens"])
 
-        self.log("val/loss_classification", loss, prog_bar=True, on_epoch=True, on_step=False)
-        self.log("val/loss_ponder", ponder_cost, prog_bar=False, on_epoch=True, on_step=False)
-        self.log("val/ponder_steps", mean_steps, prog_bar=False, on_epoch=True, on_step=False)
-        self.log("val_char_acc", char_acc, prog_bar=True, on_epoch=True, on_step=False)
-        self.log("val_seq_acc", seq_acc, prog_bar=True, on_epoch=True, on_step=False)
+        prog_bar = stage == "val"
+        self.log(f"{stage}/loss_classification", loss, prog_bar=prog_bar, on_epoch=True, on_step=False)
+        self.log(f"{stage}/loss_ponder", ponder_cost, prog_bar=False, on_epoch=True, on_step=False)
+        self.log(f"{stage}/ponder_steps", mean_steps, prog_bar=False, on_epoch=True, on_step=False)
+        self.log(f"{stage}/char_accuracy", char_acc, prog_bar=prog_bar, on_epoch=True, on_step=False)
+        self.log(f"{stage}/sequence_accuracy", seq_acc, prog_bar=prog_bar, on_epoch=True, on_step=False)
         if act_stats is not None:
-            self.log("val/mean_steps", act_stats["mean_steps"], prog_bar=False, on_epoch=True, on_step=False)
-            self.log("val/steps_p50", act_stats["steps_p50"], prog_bar=False, on_epoch=True, on_step=False)
-            self.log("val/steps_p90", act_stats["steps_p90"], prog_bar=False, on_epoch=True, on_step=False)
-            self.log("val/forced_halt_ratio", act_stats["forced_halt_ratio"], prog_bar=False, on_epoch=True, on_step=False)
-            self._maybe_log_n_updates_histogram("val", act_stats["n_updates_histogram"])
+            self.log(f"{stage}/mean_steps", act_stats["mean_steps"], prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{stage}/steps_p50", act_stats["steps_p50"], prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{stage}/steps_p90", act_stats["steps_p90"], prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{stage}/forced_halt_ratio", act_stats["forced_halt_ratio"], prog_bar=False, on_epoch=True, on_step=False)
+            self._maybe_log_n_updates_histogram(stage, act_stats["n_updates_histogram"])
+
+    def validation_step(self, batch, batch_idx):
+        self._shared_eval_step(batch, "val")
+
+    def test_step(self, batch, _):
+        self._shared_eval_step(batch, "test/ood")
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
@@ -454,6 +471,15 @@ class StringAdditionModel(pl.LightningModule):
     def val_dataloader(self):
         return torch.utils.data.DataLoader(
             self.val_dataset,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.data_workers,
+            pin_memory=self.device.type == "cuda",
+            collate_fn=partial(string_addition_collate_fn, pad_id=self.tokenizer.pad_id),
+        )
+
+    def test_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.test_dataset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.data_workers,
             pin_memory=self.device.type == "cuda",

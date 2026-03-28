@@ -63,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     toy_group.add_argument("--sequence_length", type=int, default=5)
     toy_group.add_argument("--max_digits", type=int, default=5)
     toy_group.add_argument("--string_addition_max_terms", type=int, default=2)
+    toy_group.add_argument("--string_addition_test_max_digits", type=int, default=None,
+                           help="OOD test max digits for string_addition (default: max_digits * 10)")
     toy_group.add_argument("--toy_val_size", type=int, default=10000)
     toy_group.add_argument("--toy_test_size", type=int, default=50000)
     toy_group.add_argument("--toy_eval_seed", type=int, default=1234)

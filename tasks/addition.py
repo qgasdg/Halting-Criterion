@@ -141,6 +141,7 @@ class AdditionModel(pl.LightningModule):
         ut_filter_size: int,
         ut_max_hops: int = 6,
         val_size: int = 10000,
+        test_size: int = 50000,
         eval_seed: int = 1234,
         halt_warmup_steps: int = 0,
         rnn_halt_bias: float = 0.1,
@@ -155,6 +156,7 @@ class AdditionModel(pl.LightningModule):
         self.output_layer = torch.nn.Linear(hidden_size, self.dataset.target_size * AdditionDataset.NUM_CLASSES)
 
         self.val_dataset = FixedAdditionDataset(sequence_length, max_digits, val_size, eval_seed)
+        self.test_dataset = FixedAdditionDataset(sequence_length, max_digits, test_size, eval_seed + 1)
 
         if model_type == "act_rnn":
             self.rnn_cell = AdaptiveRNNCell(
@@ -378,6 +380,9 @@ class AdditionModel(pl.LightningModule):
     def validation_step(self, batch, _):
         self._shared_eval_step(batch, "val")
 
+    def test_step(self, batch, _):
+        self._shared_eval_step(batch, "test/id")
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
 
@@ -393,6 +398,15 @@ class AdditionModel(pl.LightningModule):
     def val_dataloader(self):
         return torch.utils.data.DataLoader(
             self.val_dataset,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.data_workers,
+            pin_memory=self.device.type == "cuda",
+            collate_fn=AdditionDataset._collate_examples,
+        )
+
+    def test_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.test_dataset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.data_workers,
             pin_memory=self.device.type == "cuda",

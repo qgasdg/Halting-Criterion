@@ -72,6 +72,7 @@ def build_model(args, meta, focus_token_id):
             ut_filter_size=args.ut_filter_size,
             ut_max_hops=args.ut_max_hops,
             val_size=args.toy_val_size,
+            test_size=args.toy_test_size,
             eval_seed=args.toy_eval_seed,
             halt_warmup_steps=args.halt_warmup_steps,
             rnn_halt_bias=args.rnn_halt_bias,
@@ -80,6 +81,11 @@ def build_model(args, meta, focus_token_id):
         )
 
     if args.task == "string_addition":
+        test_max_digits = (
+            args.string_addition_test_max_digits
+            if args.string_addition_test_max_digits is not None
+            else args.max_digits * 10
+        )
         return StringAdditionModel(
             hidden_size=args.hidden_size,
             batch_size=args.batch_size,
@@ -99,6 +105,8 @@ def build_model(args, meta, focus_token_id):
             ut_filter_size=args.ut_filter_size,
             ut_max_hops=args.ut_max_hops,
             val_size=args.toy_val_size,
+            test_max_digits=test_max_digits,
+            test_size=args.toy_test_size,
             eval_seed=args.toy_eval_seed,
             rnn_halt_bias=args.rnn_halt_bias,
             ut_halt_bias=args.ut_halt_bias,

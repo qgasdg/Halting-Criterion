@@ -4,7 +4,7 @@
 import random
 from dataclasses import dataclass
 from functools import partial
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pytorch_lightning as pl
 import torch
@@ -121,16 +121,24 @@ class UniversalTransformerDecoder(torch.nn.Module):
     def _cross_attention_mask(self, decoder_tokens: torch.Tensor, encoder_tokens: torch.Tensor) -> torch.Tensor:
         return encoder_tokens.eq(self.pad_id).unsqueeze(1).expand(-1, decoder_tokens.size(1), -1)
 
-    def forward(self, decoder_inputs: torch.Tensor, memory: torch.Tensor, decoder_tokens: torch.Tensor, encoder_tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, decoder_inputs: torch.Tensor, memory: torch.Tensor, decoder_tokens: torch.Tensor, encoder_tokens: torch.Tensor, pos_offset: int = 0) -> torch.Tensor:
         x = self.embedding_proj(self.input_dropout(decoder_inputs))
         causal_mask = self._causal_mask(x).unsqueeze(0).expand(x.size(0), -1, -1)
         decoder_padding_mask = self._decoder_padding_mask(decoder_tokens)
         self_mask = causal_mask | decoder_padding_mask
         cross_mask = self._cross_attention_mask(decoder_tokens, encoder_tokens)
 
+        seq_len = x.size(1)
+        if pos_offset != 0 or seq_len > self.timing_signal.size(1):
+            timing = _gen_timing_signal(
+                seq_len, self.timing_signal.size(-1), start=pos_offset
+            ).to(x.device)
+        else:
+            timing = self.timing_signal
+
         for layer_idx in range(self.num_layers):
-            x = x + self.timing_signal[:, : x.size(1), :].to(x.device)
-            x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, x.size(1), -1).to(x.device)
+            x = x + timing[:, :seq_len, :].to(x.device)
+            x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, seq_len, -1).to(x.device)
             x = self.dec(x, memory, self_attention_mask=self_mask, cross_attention_mask=cross_mask)
 
         return self.layer_norm(x)
@@ -260,6 +268,8 @@ class StringAdditionModel(pl.LightningModule):
         rnn_halt_bias: float = 0.1,
         ut_halt_bias: float = 0.1,
         ut_attention_mode: str = "auto",
+        use_random_offset: bool = False,
+        max_offset: int = 100,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -322,7 +332,7 @@ class StringAdditionModel(pl.LightningModule):
                 pad_id=self.tokenizer.pad_id,
             )
 
-    def forward(self, src_tokens: torch.Tensor, decoder_input_tokens: torch.Tensor):
+    def forward(self, src_tokens: torch.Tensor, decoder_input_tokens: torch.Tensor, pos_offset: int = 0):
         src_embedded = self.embedding(src_tokens)
         decoder_embedded = self.embedding(decoder_input_tokens)
 
@@ -353,8 +363,8 @@ class StringAdditionModel(pl.LightningModule):
             mean_steps = torch.stack(all_step_counts).mean()
             act_stats = None
         else:
-            memory, act_info = self.encoder(src_embedded)
-            states = self.decoder(decoder_embedded, memory, decoder_input_tokens, src_tokens)
+            memory, act_info = self.encoder(src_embedded, pos_offset=pos_offset)
+            states = self.decoder(decoder_embedded, memory, decoder_input_tokens, src_tokens, pos_offset=pos_offset)
             if act_info is None:
                 ponder_cost = torch.tensor(0.0, device=src_tokens.device)
                 mean_steps = torch.tensor(float(self.hparams.ut_max_hops), device=src_tokens.device)
@@ -412,7 +422,8 @@ class StringAdditionModel(pl.LightningModule):
         experiment.log({f"{split}/n_updates_hist": wandb.Histogram(repeated.numpy())}, commit=False)
 
     def training_step(self, batch, batch_idx):
-        logits, ponder_cost, mean_steps, act_stats = self(batch["src_tokens"], batch["decoder_input_tokens"])
+        offset = random.randint(0, self.hparams.max_offset) if self.hparams.use_random_offset else 0
+        logits, ponder_cost, mean_steps, act_stats = self(batch["src_tokens"], batch["decoder_input_tokens"], pos_offset=offset)
         cls_loss = self._compute_loss(logits, batch["target_tokens"])
         loss = cls_loss if self.hparams.disable_ponder_cost else cls_loss + ponder_cost
         char_acc, seq_acc = self._metric_from_logits(logits, batch["target_tokens"])

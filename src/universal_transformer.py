@@ -26,8 +26,9 @@ def _gen_timing_signal(
     channels: int,
     min_timescale: float = 1.0,
     max_timescale: float = 1.0e4,
+    start: int = 0,
 ) -> torch.Tensor:
-    position = torch.arange(length, dtype=torch.float32)
+    position = torch.arange(start, start + length, dtype=torch.float32)
     num_timescales = channels // 2
     if num_timescales <= 0:
         return torch.zeros(1, length, channels, dtype=torch.float32)
@@ -278,15 +279,24 @@ class UniversalTransformerEncoder(nn.Module):
         self,
         inputs: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        pos_offset: int = 0,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
         x = self.embedding_proj(self.input_dropout(inputs))
         attention_mask = self._resolve_attention_mask(x, attention_mask)
+
+        seq_len = inputs.size(1)
+        if pos_offset != 0 or seq_len > self.timing_signal.size(1):
+            timing = _gen_timing_signal(
+                seq_len, self.timing_signal.size(-1), start=pos_offset
+            ).to(x.device)
+        else:
+            timing = self.timing_signal
 
         if self.act:
             x, act_info = self.act_fn(
                 x,
                 self.enc,
-                self.timing_signal,
+                timing,
                 self.position_signal,
                 self.num_layers,
                 attention_mask=attention_mask,
@@ -294,8 +304,8 @@ class UniversalTransformerEncoder(nn.Module):
             return self.layer_norm(x), act_info
 
         for layer_idx in range(self.num_layers):
-            x = x + self.timing_signal[:, : inputs.size(1), :].to(x.device)
-            x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, inputs.size(1), -1).to(x.device)
+            x = x + timing[:, :seq_len, :].to(x.device)
+            x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, seq_len, -1).to(x.device)
             x = self.enc(x, attention_mask=attention_mask)
 
         return self.layer_norm(x), None

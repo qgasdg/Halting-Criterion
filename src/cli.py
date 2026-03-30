@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         type=str,
         default="sudoku",
-        choices=["sudoku", "maze", "parity", "addition", "string_addition"],
+        choices=["sudoku", "maze", "parity", "addition", "string_addition", "copy", "reverse"],
     )
     parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
     parser.add_argument("--default_root_dir", type=str, default="runs")
@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     ut_group.add_argument("--ut_value_depth", type=int, default=256)
     ut_group.add_argument("--ut_filter_size", type=int, default=256)
     ut_group.add_argument("--ut_max_hops", type=int, default=6)
-    ut_group.add_argument("--ut_act", action="store_true")
+    ut_group.add_argument("--ut_act", action=argparse.BooleanOptionalAction, default=True)
     ut_group.add_argument("--ut_act_loss_weight", type=float, default=0.001)
     ut_group.add_argument("--ut_halt_bias", type=float, default=0.1)
     ut_group.add_argument(
@@ -71,6 +71,23 @@ def build_parser() -> argparse.ArgumentParser:
     toy_group.add_argument("--parity_near_ood_bits", type=int, default=None)
     toy_group.add_argument("--parity_ood_bits", type=int, default=None)
     toy_group.add_argument("--halt_warmup_steps", type=int, default=0)
+    toy_group.add_argument(
+        "--use_random_offset",
+        action="store_true",
+        help="Apply random positional offset per batch during training.",
+    )
+    toy_group.add_argument(
+        "--max_offset",
+        type=int,
+        default=100,
+        help="Maximum random positional offset value.",
+    )
+    toy_group.add_argument(
+        "--sequence_test_length",
+        type=int,
+        default=None,
+        help="OOD test sequence length for copy/reverse (default: sequence_length * 10).",
+    )
 
     wandb_group = parser.add_argument_group("Weights & Biases options")
     wandb_group.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")

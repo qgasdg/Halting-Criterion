@@ -2,7 +2,9 @@ from src.models import ACTPuzzleSolver
 from src.ut_task_policy import get_ut_task_policy
 from src.universal_transformer import UniversalTransformerPuzzleSolver
 from tasks.addition import AdditionModel
+from tasks.copy import CopyModel
 from tasks.parity import ParityModel
+from tasks.reverse import ReverseModel
 from tasks.string_addition import StringAdditionModel
 
 MAZE_CHARSET = "# SGo"
@@ -17,7 +19,7 @@ def get_focus_token_id(task: str):
 def build_model(args, meta, focus_token_id):
     ut_policy = None
     ut_attention_mode = args.ut_attention_mode
-    if args.task in {"parity", "addition", "maze", "sudoku"}:
+    if args.task in {"parity", "addition", "maze", "sudoku", "copy", "reverse"}:
         ut_policy = get_ut_task_policy(args.task)
         ut_attention_mode = (
             ut_policy.attention_mode if args.ut_attention_mode == "auto" else args.ut_attention_mode
@@ -78,6 +80,8 @@ def build_model(args, meta, focus_token_id):
             rnn_halt_bias=args.rnn_halt_bias,
             ut_halt_bias=args.ut_halt_bias,
             ut_attention_mode=ut_attention_mode,
+            use_random_offset=args.use_random_offset,
+            max_offset=args.max_offset,
         )
 
     if args.task == "string_addition":
@@ -111,6 +115,39 @@ def build_model(args, meta, focus_token_id):
             rnn_halt_bias=args.rnn_halt_bias,
             ut_halt_bias=args.ut_halt_bias,
             ut_attention_mode=ut_attention_mode,
+            use_random_offset=args.use_random_offset,
+            max_offset=args.max_offset,
+        )
+
+    if args.task in {"copy", "reverse"}:
+        test_sequence_length = (
+            args.sequence_test_length
+            if args.sequence_test_length is not None
+            else args.sequence_length * 10
+        )
+        model_cls = CopyModel if args.task == "copy" else ReverseModel
+        return model_cls(
+            sequence_length=args.sequence_length,
+            test_sequence_length=test_sequence_length,
+            hidden_size=args.hidden_size,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            data_workers=args.data_workers,
+            ut_act=args.ut_act,
+            ut_act_loss_weight=args.ut_act_loss_weight,
+            ut_heads=args.ut_heads,
+            ut_key_depth=args.ut_key_depth,
+            ut_value_depth=args.ut_value_depth,
+            ut_filter_size=args.ut_filter_size,
+            ut_max_hops=args.ut_max_hops,
+            ut_halt_bias=args.ut_halt_bias,
+            ut_attention_mode=ut_attention_mode,
+            disable_ponder_cost=args.disable_ponder_cost,
+            use_random_offset=args.use_random_offset,
+            max_offset=args.max_offset,
+            val_size=args.toy_val_size,
+            test_size=args.toy_test_size,
+            eval_seed=args.toy_eval_seed,
         )
 
     common_model_kwargs = dict(

@@ -147,6 +147,8 @@ class AdditionModel(pl.LightningModule):
         rnn_halt_bias: float = 0.1,
         ut_halt_bias: float = 0.1,
         ut_attention_mode: str = "auto",
+        use_random_offset: bool = False,
+        max_offset: int = 100,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -241,7 +243,7 @@ class AdditionModel(pl.LightningModule):
             return
         experiment.log({f"{split}/n_updates_hist": wandb.Histogram(repeated.numpy())}, commit=False)
 
-    def forward(self, number_sequence: torch.Tensor):
+    def forward(self, number_sequence: torch.Tensor, pos_offset: int = 0):
         act_stats = None
         if self.model_type == "act_rnn":
             hidden = None
@@ -260,7 +262,7 @@ class AdditionModel(pl.LightningModule):
             mean_steps = torch.stack(step_counts).mean()
         else:
             embedded = self.input_proj(number_sequence.transpose(0, 1))
-            states, act_info = self.encoder(embedded)
+            states, act_info = self.encoder(embedded, pos_offset=pos_offset)
             hidden_stacked = states.transpose(0, 1)
             if act_info is None:
                 ponder_cost = torch.tensor(0.0, device=number_sequence.device)
@@ -337,7 +339,8 @@ class AdditionModel(pl.LightningModule):
 
     def training_step(self, batch, _):
         numbers, sums = batch
-        logits, ponder_cost, mean_steps, act_stats = self(numbers)
+        offset = random.randint(0, self.hparams.max_offset) if self.hparams.use_random_offset else 0
+        logits, ponder_cost, mean_steps, act_stats = self(numbers, pos_offset=offset)
 
         cls_loss = F.cross_entropy(
             logits.view(-1, AdditionDataset.NUM_CLASSES),

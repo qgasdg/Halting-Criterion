@@ -188,6 +188,13 @@ class AdditionModel(pl.LightningModule):
 
         self._halting_frozen = False
 
+    def set_fixed_ponder_steps(self, n: int) -> None:
+        """추론 시 고정 N회 ponder step을 사용하도록 설정."""
+        if self.model_type == "act_rnn":
+            self.rnn_cell.fixed_ponder_steps = n
+        elif self.hparams.ut_act and hasattr(self, 'encoder'):
+            self.encoder.set_fixed_ponder_steps(n)
+
     def _halting_named_parameters(self):
         if self.model_type == "act_rnn":
             return list(self.rnn_cell.halting_layer.named_parameters(prefix="rnn_cell.halting_layer"))

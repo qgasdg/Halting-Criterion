@@ -43,12 +43,45 @@ class AdaptiveRNNCell(nn.Module):
         # halting unit bias 초기화 (CLI에서 조절 가능)
         self.halting_layer.bias.data.fill_(halt_bias_init)
 
+        # 고정 ponder step 모드 (None이면 ACT 사용, 정수면 해당 횟수만큼 고정 실행)
+        self.fixed_ponder_steps: int | None = None
+
+    def _forward_fixed(self, input_tensor: torch.Tensor, hidden: torch.Tensor, num_steps: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+        """고정 횟수만큼 GRU를 돌리고 최종 hidden state를 반환 (halting 로직 없음)."""
+        batch_size = input_tensor.size(0)
+        device = input_tensor.device
+
+        ones = torch.ones(batch_size, 1, device=device)
+        zeros = torch.zeros(batch_size, 1, device=device)
+        input_first = torch.cat([input_tensor, ones], dim=1)
+        input_ponder = torch.cat([input_tensor, zeros], dim=1)
+
+        for n in range(num_steps):
+            step_input = input_first if n == 0 else input_ponder
+            hidden = self.rnn_cell(step_input, hidden)
+
+        step_count = torch.full((batch_size,), float(num_steps), device=device)
+        ponder_cost = torch.zeros(1, device=device)
+        act_stats = {
+            'remainder_mean': torch.tensor(0.0, device=device),
+            'remainder_std': torch.tensor(0.0, device=device),
+            'natural_halt_ratio': torch.tensor(0.0, device=device),
+            'forced_halt_ratio': torch.tensor(0.0, device=device),
+            'steps_p50': torch.tensor(float(num_steps), device=device),
+            'steps_p90': torch.tensor(float(num_steps), device=device),
+            'accumulated_p_curve': torch.ones(self.time_limit, device=device),
+        }
+        return hidden, ponder_cost, step_count, act_stats
+
     def forward(self, input_tensor: torch.Tensor, hidden: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         batch_size = input_tensor.size(0)
         device = input_tensor.device
 
         if hidden is None:
             hidden = torch.zeros(batch_size, self.hidden_size, device=device)
+
+        if self.fixed_ponder_steps is not None:
+            return self._forward_fixed(input_tensor, hidden, self.fixed_ponder_steps)
 
         accumulated_state = torch.zeros_like(hidden)
         accumulated_p = torch.zeros(batch_size, device=device)
@@ -188,6 +221,10 @@ class ACTPuzzleSolver(pl.LightningModule):
         self.time_penalty_start = time_penalty_start
         self.time_penalty_warmup_steps = max(0, int(time_penalty_warmup_steps))
         self.disable_ponder_cost = bool(disable_ponder_cost)
+
+    def set_fixed_ponder_steps(self, n: int) -> None:
+        """추론 시 ACT halting 대신 고정 N회 ponder step을 사용하도록 설정."""
+        self.cell.fixed_ponder_steps = n
 
     def _compute_current_time_penalty(self) -> float:
         if self.time_penalty_warmup_steps <= 0:

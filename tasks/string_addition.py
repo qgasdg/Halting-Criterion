@@ -322,6 +322,13 @@ class StringAdditionModel(pl.LightningModule):
                 pad_id=self.tokenizer.pad_id,
             )
 
+    def set_fixed_ponder_steps(self, n: int) -> None:
+        """추론 시 고정 N회 ponder step을 사용하도록 설정."""
+        if self.model_type == "act_rnn":
+            self.rnn_cell.fixed_ponder_steps = n
+        elif self.hparams.ut_act and hasattr(self, 'encoder'):
+            self.encoder.set_fixed_ponder_steps(n)
+
     def forward(self, src_tokens: torch.Tensor, decoder_input_tokens: torch.Tensor):
         src_embedded = self.embedding(src_tokens)
         decoder_embedded = self.embedding(decoder_input_tokens)

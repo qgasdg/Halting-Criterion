@@ -178,6 +178,7 @@ class ACTBasic(nn.Module):
         self.p.bias.data.fill_(halt_bias_init)
         self.sigma = nn.Sigmoid()
         self.threshold = 1.0 - halt_epsilon
+        self.fixed_ponder_steps: int | None = None
 
     def forward(
         self,
@@ -190,6 +191,18 @@ class ACTBasic(nn.Module):
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         bsz, seq_len, _ = state.shape
         device = state.device
+
+        # 고정 ponder step 모드: halting 없이 N회 고정 실행
+        if self.fixed_ponder_steps is not None:
+            num_steps = self.fixed_ponder_steps
+            for step in range(num_steps):
+                state = state + time_signal[:, :seq_len, :].to(device)
+                state = state + position_signal[:, step, :].unsqueeze(1).expand(-1, seq_len, -1).to(device)
+                state = transform(state, attention_mask=attention_mask)
+            remainders = torch.zeros(bsz, seq_len, device=device)
+            n_updates = torch.full((bsz, seq_len), float(num_steps), device=device)
+            forced_halt_ratio = torch.tensor(0.0, device=device)
+            return state, (remainders, n_updates, forced_halt_ratio)
 
         halting_probability = torch.zeros(bsz, seq_len, device=device)
         remainders = torch.zeros(bsz, seq_len, device=device)
@@ -266,6 +279,18 @@ class UniversalTransformerEncoder(nn.Module):
         if self.act:
             self.act_fn = ACTBasic(hidden_size, halt_bias_init=halt_bias_init)
 
+        # 고정 ponder step 모드
+        self._fixed_ponder_steps: int | None = None
+
+    def set_fixed_ponder_steps(self, n: int) -> None:
+        """추론 시 고정 N회 ponder step을 사용하도록 설정."""
+        if n > self.num_layers:
+            # position_signal 크기 확장
+            self.position_signal = _gen_timing_signal(n, self.position_signal.size(-1))
+        self._fixed_ponder_steps = n
+        if self.act:
+            self.act_fn.fixed_ponder_steps = n
+
     def _resolve_attention_mask(self, inputs: torch.Tensor, attention_mask: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
         if attention_mask is not None:
             return attention_mask.to(device=inputs.device, dtype=torch.bool)
@@ -293,7 +318,8 @@ class UniversalTransformerEncoder(nn.Module):
             )
             return self.layer_norm(x), act_info
 
-        for layer_idx in range(self.num_layers):
+        num_iters = self._fixed_ponder_steps if self._fixed_ponder_steps is not None else self.num_layers
+        for layer_idx in range(num_iters):
             x = x + self.timing_signal[:, : inputs.size(1), :].to(x.device)
             x = x + self.position_signal[:, layer_idx, :].unsqueeze(1).expand(-1, inputs.size(1), -1).to(x.device)
             x = self.enc(x, attention_mask=attention_mask)
@@ -346,6 +372,10 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
 
         self.task_name = task_name
         self.focus_token_id = focus_token_id if focus_token_id >= 0 else None
+
+    def set_fixed_ponder_steps(self, n: int) -> None:
+        """추론 시 고정 N회 ponder step을 사용하도록 설정."""
+        self.encoder.set_fixed_ponder_steps(n)
 
     def _maybe_log_n_updates_histogram(self, split: str, histogram: torch.Tensor) -> None:
         if not isinstance(self.logger, WandbLogger):

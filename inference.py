@@ -43,6 +43,12 @@ def main():
     parser.add_argument("--data_dir", type=str, default=None, help="Data directory (required for sudoku/maze)")
     parser.add_argument("--batch_size", type=int, default=None, help="Override checkpoint batch size")
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument(
+        "--fixed_ponder_steps",
+        type=int,
+        default=None,
+        help="ACT halting을 무시하고 고정 N회 ponder step 실행 (예: 6)",
+    )
     args = parser.parse_args()
 
     if args.task not in TOY_TASKS and args.data_dir is None:
@@ -53,6 +59,10 @@ def main():
         override_kwargs["batch_size"] = args.batch_size
 
     model = load_model(args.checkpoint, args.task, override_kwargs)
+
+    if args.fixed_ponder_steps is not None:
+        model.set_fixed_ponder_steps(args.fixed_ponder_steps)
+        print(f"[inference] Fixed ponder steps: {args.fixed_ponder_steps} (ACT halting disabled)")
 
     trainer = pl.Trainer(accelerator="auto", devices=1, logger=False, enable_checkpointing=False)
 

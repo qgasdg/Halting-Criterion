@@ -70,8 +70,7 @@ def main():
         # ParityModel has test_dataloader with id / near_ood / ood splits
         trainer.test(model)
     elif args.task in {"addition", "string_addition"}:
-        # These models only have val_dataloader
-        trainer.validate(model)
+        trainer.test(model)
     else:
         # sudoku / maze: supply external test loader
         batch_size = args.batch_size if args.batch_size is not None else model.hparams.batch_size

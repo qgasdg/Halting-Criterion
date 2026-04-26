@@ -2,7 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
+
+_SUPPORTED_CELL_TYPES = ("gru", "lstm", "tanh_rnn")
+
 
 class AdaptiveRNNCell(nn.Module):
     """
@@ -17,6 +20,10 @@ class AdaptiveRNNCell(nn.Module):
     구현 메모:
     - 논문식 halting threshold (1-ε) 사용 (기본 ε=0.01).
     - ponder cost는 논문식 N + R을 사용하며, R이 halting unit으로 역전파됨.
+    - cell_type 으로 RNN 내부 셀 선택 가능:
+        * "gru"      : GRUCell (기본)
+        * "lstm"     : LSTMCell — (h, c) 튜플로 상태를 유지, 누적은 h 기준
+        * "tanh_rnn" : tanh 활성화 단순 RNN (Graves 2016 parity 태스크 스펙)
     """
     def __init__(
         self,
@@ -26,7 +33,8 @@ class AdaptiveRNNCell(nn.Module):
         time_limit: int = 20,
         halt_epsilon: float = 0.01,
         dropout: float = 0.0,
-        halt_bias_init: float = 0.1,
+        halt_bias_init: float = 1.0,
+        cell_type: str = "gru",
     ):
         super().__init__()
         self.input_size = input_size
@@ -36,18 +44,48 @@ class AdaptiveRNNCell(nn.Module):
         self.halt_epsilon = halt_epsilon
         self.dropout = dropout
 
+        cell_type = cell_type.lower()
+        if cell_type not in _SUPPORTED_CELL_TYPES:
+            raise ValueError(
+                f"Unsupported cell_type={cell_type!r}. Expected one of {_SUPPORTED_CELL_TYPES}."
+            )
+        self.cell_type = cell_type
+
         # 입력 사이즈 + 1 (Flag용: 1=First step, 0=Pondering)
-        self.rnn_cell = nn.GRUCell(input_size + 1, hidden_size)
-        
+        if cell_type == "gru":
+            self.rnn_cell = nn.GRUCell(input_size + 1, hidden_size)
+        elif cell_type == "lstm":
+            self.rnn_cell = nn.LSTMCell(input_size + 1, hidden_size)
+        else:  # tanh_rnn
+            self.rnn_cell = nn.RNNCell(input_size + 1, hidden_size, nonlinearity="tanh")
+
         self.halting_layer = nn.Linear(hidden_size, 1)
         # halting unit bias 초기화 (CLI에서 조절 가능)
         self.halting_layer.bias.data.fill_(halt_bias_init)
 
         # 고정 ponder step 모드 (None이면 ACT 사용, 정수면 해당 횟수만큼 고정 실행)
-        self.fixed_ponder_steps: int | None = None
+        self.fixed_ponder_steps: Optional[int] = None
+
+    def _apply_cell(
+        self,
+        step_input: torch.Tensor,
+        hidden: torch.Tensor,
+        cell_state: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """셀 종류에 상관없이 (h, c|None)을 일관되게 반환."""
+        if self.cell_type == "lstm":
+            new_hidden, new_cell = self.rnn_cell(step_input, (hidden, cell_state))
+            return new_hidden, new_cell
+        new_hidden = self.rnn_cell(step_input, hidden)
+        return new_hidden, None
+
+    def _init_cell_state(self, batch_size: int, device: torch.device) -> Optional[torch.Tensor]:
+        if self.cell_type == "lstm":
+            return torch.zeros(batch_size, self.hidden_size, device=device)
+        return None
 
     def _forward_fixed(self, input_tensor: torch.Tensor, hidden: torch.Tensor, num_steps: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
-        """고정 횟수만큼 GRU를 돌리고 최종 hidden state를 반환 (halting 로직 없음)."""
+        """고정 횟수만큼 RNN을 돌리고 최종 hidden state를 반환 (halting 로직 없음)."""
         batch_size = input_tensor.size(0)
         device = input_tensor.device
 
@@ -56,9 +94,10 @@ class AdaptiveRNNCell(nn.Module):
         input_first = torch.cat([input_tensor, ones], dim=1)
         input_ponder = torch.cat([input_tensor, zeros], dim=1)
 
+        cell_state = self._init_cell_state(batch_size, device)
         for n in range(num_steps):
             step_input = input_first if n == 0 else input_ponder
-            hidden = self.rnn_cell(step_input, hidden)
+            hidden, cell_state = self._apply_cell(step_input, hidden, cell_state)
 
         step_count = torch.full((batch_size,), float(num_steps), device=device)
         ponder_cost = torch.zeros(1, device=device)
@@ -91,22 +130,25 @@ class AdaptiveRNNCell(nn.Module):
         natural_halt_count = torch.zeros(batch_size, device=device)
         forced_halt_count = torch.zeros(batch_size, device=device)
         accumulated_p_curve = []
-        
+
+        # LSTM 등에서 필요한 보조 cell state
+        cell_state = self._init_cell_state(batch_size, device)
+
         # 아직 halt되지 않은 샘플 마스크
         still_running = torch.ones(batch_size, dtype=torch.bool, device=device)
-        
+
         # 입력 플래그 부착
         ones = torch.ones(batch_size, 1, device=device)
         zeros = torch.zeros(batch_size, 1, device=device)
-        
+
         input_first = torch.cat([input_tensor, ones], dim=1)
         input_ponder = torch.cat([input_tensor, zeros], dim=1)
-        
+
         for n in range(self.time_limit):
             # 첫 스텝과 생각 스텝 구분
             step_input = input_first if n == 0 else input_ponder
 
-            hidden = self.rnn_cell(step_input, hidden)
+            hidden, cell_state = self._apply_cell(step_input, hidden, cell_state)
             
             h_t = self.halting_layer(hidden).squeeze(-1)
             p_t = torch.sigmoid(h_t)  # 논문식 halting unit
@@ -193,17 +235,18 @@ class ACTPuzzleSolver(pl.LightningModule):
         focus_token_id: int = -1,
         model_type: str = "act_rnn",
         disable_ponder_cost: bool = False,
-        rnn_halt_bias: float = 0.1,
+        rnn_halt_bias: float = 1.0,
+        rnn_cell_type: str = "gru",
     ):
         super().__init__()
         self.save_hyperparameters()
 
         self.embedding = nn.Embedding(vocab_size, 16)
-        
+
         # Grid 전체를 Flatten해서 입력으로 씀
         input_dim = seq_len * 16
         self.encoder = nn.Linear(input_dim, hidden_size)
-        
+
         # 위에서 정의한 ACT Cell 사용
         self.cell = AdaptiveRNNCell(
             input_size=hidden_size,
@@ -211,6 +254,7 @@ class ACTPuzzleSolver(pl.LightningModule):
             time_penalty=time_penalty,
             time_limit=time_limit,
             halt_bias_init=rnn_halt_bias,
+            cell_type=rnn_cell_type,
         )
         
         self.decoder = nn.Linear(hidden_size, seq_len * vocab_size)

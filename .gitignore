@@ -5,6 +5,15 @@ __pycache__/
 
 # PyTorch Lightning logs and checkpoints
 lightning_logs/
-
+runs/
 
 data/
+
+# Virtual environments
+.venv/
+.python-version
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

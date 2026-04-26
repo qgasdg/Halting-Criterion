@@ -99,9 +99,10 @@ class ParityModel(pl.LightningModule):
         near_ood_bits: Optional[int] = None,
         ood_bits: Optional[int] = None,
         halt_warmup_steps: int = 0,
-        rnn_halt_bias: float = 0.1,
-        ut_halt_bias: float = 0.1,
+        rnn_halt_bias: float = 1.0,
+        ut_halt_bias: float = 1.0,
         ut_attention_mode: str = "auto",
+        rnn_cell_type: str = "gru",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -125,6 +126,7 @@ class ParityModel(pl.LightningModule):
                 time_penalty=time_penalty,
                 time_limit=time_limit,
                 halt_bias_init=rnn_halt_bias,
+                cell_type=rnn_cell_type,
             )
             self.output_layer = torch.nn.Linear(hidden_size, 1)
         else:
@@ -374,7 +376,7 @@ def main() -> None:
     parser.add_argument("--time_penalty", type=float, default=1e-3)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--time_limit", type=int, default=20)
+    parser.add_argument("--time_limit", type=int, default=100)
     parser.add_argument("--data_workers", type=int, default=1)
     parser.add_argument("--model_type", type=str, default="act_rnn", choices=["act_rnn", "universal_transformer"])
     parser.add_argument("--disable_ponder_cost", action="store_true")

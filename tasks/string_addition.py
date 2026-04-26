@@ -257,9 +257,10 @@ class StringAdditionModel(pl.LightningModule):
         test_max_digits: int = 8,
         test_size: int = 50000,
         eval_seed: int = 1234,
-        rnn_halt_bias: float = 0.1,
-        ut_halt_bias: float = 0.1,
+        rnn_halt_bias: float = 1.0,
+        ut_halt_bias: float = 1.0,
         ut_attention_mode: str = "auto",
+        rnn_cell_type: str = "gru",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -293,6 +294,7 @@ class StringAdditionModel(pl.LightningModule):
                 time_penalty=time_penalty,
                 time_limit=time_limit,
                 halt_bias_init=rnn_halt_bias,
+                cell_type=rnn_cell_type,
             )
             self.encoder_summary = torch.nn.Linear(hidden_size, hidden_size)
         else:

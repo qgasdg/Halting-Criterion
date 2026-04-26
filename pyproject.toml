@@ -1,0 +1,32 @@
+[project]
+name = "halting-criterion"
+version = "0.1.0"
+description = "ACT (Adaptive Computation Time) and Universal Transformer experiments on toy and puzzle tasks."
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2",
+    "pytorch-lightning>=2.4",
+    "numpy>=1.26",
+    "tensorboard>=2.15",
+]
+
+[project.optional-dependencies]
+wandb = ["wandb>=0.17"]
+dataset = [
+    "argdantic>=1.0",
+    "pydantic>=2.0",
+    "tqdm>=4.66",
+    "huggingface_hub>=0.23",
+]
+nlp = [
+    "datasets>=2.18",
+    "tokenizers>=0.19",
+    "sentencepiece>=0.2",
+    "sacrebleu>=2.4",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv]
+package = false

@@ -8,7 +8,7 @@ from torch.optim.swa_utils import get_ema_avg_fn
 
 from src.cli import parse_args
 from src.data import create_dataloaders
-from src.model_factory import build_model, get_focus_token_id
+from src.model_factory import SELF_LOADING_TASK_NAMES, build_model, get_focus_token_id
 
 
 torch.set_float32_matmul_precision("medium")
@@ -51,7 +51,7 @@ def resolve_checkpoint_dir(args, loggers) -> str:
 def main():
     args = parse_args()
 
-    if args.task in {"parity", "addition", "string_addition"}:
+    if args.task in SELF_LOADING_TASK_NAMES:
         model = build_model(args, meta=None, focus_token_id=None)
     else:
         if args.data_dir is None:
@@ -86,20 +86,7 @@ def main():
             )
         )
 
-    if args.task == "parity":
-        trainer = pl.Trainer(
-            max_steps=args.max_steps,
-            accelerator="auto",
-            devices=1,
-            log_every_n_steps=args.log_every_n_steps,
-            default_root_dir=args.default_root_dir,
-            callbacks=callbacks,
-            logger=loggers,
-        )
-        trainer.fit(model, ckpt_path=args.resume_ckpt)
-        trainer.test(model, ckpt_path="last", weights_only=False)
-
-    elif args.task in {"addition", "string_addition"}:
+    if args.task in SELF_LOADING_TASK_NAMES:
         trainer = pl.Trainer(
             max_steps=args.max_steps,
             accelerator="auto",

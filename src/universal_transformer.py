@@ -172,7 +172,7 @@ class EncoderLayer(nn.Module):
 
 
 class ACTBasic(nn.Module):
-    def __init__(self, hidden_size: int, halt_epsilon: float = 0.01, halt_bias_init: float = 0.1):
+    def __init__(self, hidden_size: int, halt_epsilon: float = 0.01, halt_bias_init: float = 1.0):
         super().__init__()
         self.p = nn.Linear(hidden_size, 1)
         self.p.bias.data.fill_(halt_bias_init)
@@ -250,7 +250,7 @@ class UniversalTransformerEncoder(nn.Module):
         attention_dropout: float = 0.0,
         relu_dropout: float = 0.0,
         act: bool = False,
-        halt_bias_init: float = 0.1,
+        halt_bias_init: float = 1.0,
         attention_mode: str = "full",
     ):
         super().__init__()
@@ -348,7 +348,7 @@ class UniversalTransformerPuzzleSolver(pl.LightningModule):
         task_name: str = "sudoku",
         focus_token_id: int = -1,
         model_type: str = "universal_transformer",
-        ut_halt_bias: float = 0.1,
+        ut_halt_bias: float = 1.0,
         ut_attention_mode: str = "full",
     ):
         super().__init__()

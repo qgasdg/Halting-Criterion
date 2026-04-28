@@ -249,14 +249,22 @@ Parity/Addition은 기존 `tasks/*.py` 단독 실행도 가능하지만,
 
 Graves 2016 §4.1: 입력 64 비트 (`bits=64`) ±1 sparsity, RNN with **tanh** activation, hidden 128, time_limit 100, time_penalty sweep 1e-4..1e-1. UT 논문은 동일 태스크에서 hidden_size=128, ACT 사용.
 
+> **아키텍처 노트.** Graves spec 대로 **단일 64-d 입력 벡터** (가변 길이 ±1, 나머지 0 padding) 를 받아 ACT 가 그 위에서 ponder 한다.
+> ACT-RNN 분기 = `input_proj: Linear(max_bits, hidden) → AdaptiveRNNCell (단일 호출) → output_layer`.
+> OOD 입력 (`parity_near_ood_bits`, `parity_ood_bits`) 은 학습 시 가정한 max bits 까지 zero-pad 된다.
+>
+> **`--rnn_halt_bias` 가 양수면 ponder 가 N=2 에 갇힘** (sigmoid(bias)≥0.5 → 2 step 만에 누적 halt 확률이 1-ε 도달).
+> 깊은 pondering 이 필요하면 음수 bias 를 쓴다: `-2.0` → 초기 ~9 step, `-3.0` → ~22 step.
+
 ```bash
-# ACT-RNN (Graves 2016 스펙)
+# ACT-RNN (Graves 2016 스펙, 깊은 ACT pondering 용 음수 halt bias)
 uv run python run.py \
   --task parity \
   --model_type act_rnn --rnn_cell_type tanh_rnn \
   --bits 64 --hidden_size 128 \
-  --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias 1.0 \
-  --batch_size 16 --max_steps 200000 \
+  --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias -2.0 \
+  --learning_rate 1e-3 \
+  --batch_size 128 --max_steps 200000 \
   --default_root_dir runs/parity_rnn
 
 # Universal Transformer (UT 논문 §4.1 비교)
@@ -459,7 +467,7 @@ uv run python run.py \
 
 | 태스크 | 논문 / 절 | 주요 하이퍼파라미터 | 예제 명령어 |
 |---|---|---|---|
-| Parity | Graves 2016 §4.1 | `tanh_rnn`, hidden 128, bits 64, time_limit 100 | [§6.1](#61-parity-act-rnn--ut-공통-graves-2016-41) |
+| Parity | Graves 2016 §4.1 | `tanh_rnn`, hidden 128, bits 64, time_limit 100, **`rnn_halt_bias=-2.0`** (음수 권장 — 양수면 ponder N=2 에 갇힘) | [§6.1](#61-parity-act-rnn--ut-공통-graves-2016-41) |
 | Addition | Graves 2016 §4.2 | LSTM, hidden 512, time_limit 20 | [§6.2](#62-addition-act-rnn--ut-공통-graves-2016-42) |
 | Copy / Reverse | UT 논문 §4.2 | UT, hidden 512, max_hops 8, ACT, train≤40 / eval≤400 | [§6.3](#63-copy--reverse-ut-논문-42) |
 | Logic | Graves 2016 §4.2 | LSTM, hidden 128, 1–10 step, time_limit 100 | [§6.4](#64-logic-graves-2016-42) |

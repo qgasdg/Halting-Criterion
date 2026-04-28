@@ -103,9 +103,14 @@ class ParityModel(pl.LightningModule):
         ut_halt_bias: float = 1.0,
         ut_attention_mode: str = "auto",
         rnn_cell_type: str = "gru",
+        time_penalty_start: float = 0.0,
+        time_penalty_warmup_steps: int = 0,
     ):
         super().__init__()
         self.save_hyperparameters()
+        self._target_time_penalty = float(time_penalty)
+        self._time_penalty_start = float(time_penalty_start)
+        self._time_penalty_warmup_steps = max(0, int(time_penalty_warmup_steps))
 
         self.dataset = ParityDataset(bits)
         self.model_type = model_type
@@ -118,10 +123,18 @@ class ParityModel(pl.LightningModule):
             "near_ood": FixedParityDataset(bits=near_bits, size=test_size, seed=eval_seed + 2),
             "ood": FixedParityDataset(bits=far_bits, size=test_size, seed=eval_seed + 3),
         }
+        # Graves 2016 §4.1 spec: 입력은 단일 길이 max(bits, OOD bits) 의 벡터.
+        # OOD 평가에서 입력 길이가 학습보다 크므로 input_proj 는 max 길이로 정의하고
+        # 학습 시에는 zero-pad 한다 (Graves 의 가변 길이 인코딩과 일치).
+        self._max_input_bits = max(bits, near_bits, far_bits)
 
         if model_type == "act_rnn":
+            # 64-d 입력 벡터를 단일 ACT pondering 으로 처리한다 (Graves 2016 §4.1).
+            # 이전 구현은 토큰별 RNN unrolling 을 했으나 학습 신호가 64-step
+            # vanilla RNN 의 vanishing gradient 에 묻혀 0.5 정체가 발생함.
+            self.input_proj = torch.nn.Linear(self._max_input_bits, hidden_size)
             self.rnn_cell = AdaptiveRNNCell(
-                input_size=1,
+                input_size=hidden_size,
                 hidden_size=hidden_size,
                 time_penalty=time_penalty,
                 time_limit=time_limit,
@@ -198,6 +211,16 @@ class ParityModel(pl.LightningModule):
         should_freeze = self.global_step < self.hparams.halt_warmup_steps
         self._set_halting_frozen(should_freeze)
 
+    def _compute_current_time_penalty(self) -> float:
+        """time_penalty_warmup_steps 동안 start → target 으로 선형 ramp."""
+        if self._time_penalty_warmup_steps <= 0:
+            return self._target_time_penalty
+        progress = min(1.0, float(self.global_step) / float(self._time_penalty_warmup_steps))
+        return float(
+            self._time_penalty_start
+            + (self._target_time_penalty - self._time_penalty_start) * progress
+        )
+
     def _maybe_log_n_updates_histogram(self, split: str, histogram: torch.Tensor) -> None:
         if not isinstance(self.logger, WandbLogger):
             return
@@ -216,23 +239,22 @@ class ParityModel(pl.LightningModule):
 
     def forward(self, binary_sequence: torch.Tensor):
         if self.model_type == "act_rnn":
-            batch_size, seq_len, _ = binary_sequence.shape
-            hidden = torch.zeros(batch_size, self.hparams.hidden_size, device=binary_sequence.device)
-
-            token_ponder_costs = []
-            token_steps = []
-            for token_idx in range(seq_len):
-                token_hidden, token_ponder_cost, token_step_count, _ = self.rnn_cell(
-                    binary_sequence[:, token_idx, :],
-                    hidden=hidden,
+            # Graves 2016 §4.1: (B, bits, 1) → flatten (B, bits) → 단일 ACT call.
+            flat = binary_sequence.squeeze(-1)
+            in_features = self.input_proj.in_features
+            seq_len = flat.size(1)
+            if seq_len < in_features:
+                # OOD 보다 짧은 입력 (또는 학습 분포) 은 0 으로 우측 패딩.
+                flat = F.pad(flat, (0, in_features - seq_len))
+            elif seq_len > in_features:
+                raise RuntimeError(
+                    f"Input sequence length {seq_len} exceeds input_proj capacity "
+                    f"{in_features}. parity_near_ood_bits / parity_ood_bits 가 "
+                    f"학습 시 가정한 최대보다 큽니다."
                 )
-                hidden = token_hidden
-                token_ponder_costs.append(token_ponder_cost)
-                token_steps.append(token_step_count)
-
-            ponder_cost = torch.stack(token_ponder_costs).mean()
-            steps = torch.stack(token_steps, dim=1).mean(dim=1)
-            logits = self.output_layer(hidden).squeeze(1)
+            ctx = F.relu(self.input_proj(flat))
+            hidden, ponder_cost, steps, _ = self.rnn_cell(ctx)
+            logits = self.output_layer(hidden).squeeze(-1)
             return logits, ponder_cost, steps, None
 
         embedded = self.input_proj(binary_sequence)
@@ -297,6 +319,9 @@ class ParityModel(pl.LightningModule):
 
     def training_step(self, batch, _):
         sequences, targets = batch
+        if self.model_type == "act_rnn":
+            # warmup 동안 time_penalty 를 start → target 으로 ramp.
+            self.rnn_cell.time_penalty = self._compute_current_time_penalty()
         logits, ponder_cost, steps, act_stats = self(sequences)
         cls_loss = F.binary_cross_entropy_with_logits(logits, targets)
         loss = cls_loss if self.hparams.disable_ponder_cost else cls_loss + ponder_cost
@@ -313,6 +338,9 @@ class ParityModel(pl.LightningModule):
                 "train/accuracy": accuracy,
                 "train/steps": mean_steps,
                 "train/ponder_steps": mean_steps,
+                "train/time_penalty_current": self.rnn_cell.time_penalty
+                if self.model_type == "act_rnn"
+                else 0.0,
             },
             prog_bar=True,
         )

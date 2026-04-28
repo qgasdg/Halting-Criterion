@@ -175,6 +175,8 @@ def build_model(args, meta, focus_token_id):
             ut_halt_bias=args.ut_halt_bias,
             ut_attention_mode=ut_attention_mode,
             rnn_cell_type=args.rnn_cell_type,
+            time_penalty_start=args.time_penalty_start,
+            time_penalty_warmup_steps=args.time_penalty_warmup_steps,
         )
 
     if args.task == "addition":

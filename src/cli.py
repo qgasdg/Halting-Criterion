@@ -37,6 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
+    parser.add_argument(
+        "--save_every_n_steps",
+        type=int,
+        default=0,
+        help=(
+            "0=비활성. >0이면 매 N step 마다 체크포인트 저장 (--save_every_n_epochs 대신). "
+            "IterableDataset 기반 toy/algorithmic 태스크는 epoch 경계가 모호하므로 "
+            "step 기반 저장을 권장 (예: 5000)."
+        ),
+    )
     parser.add_argument("--max_steps", type=int, default=200000)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--data_workers", type=int, default=1)

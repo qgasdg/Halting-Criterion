@@ -67,12 +67,23 @@ def main():
     loggers = build_loggers(args)
     checkpoint_dir = resolve_checkpoint_dir(args, loggers)
 
+    # IterableDataset 기반 태스크 (parity, addition, copy 등) 는 epoch 경계가
+    # max_steps 종료 시점뿐이라 every_n_epochs=1 로는 학습 종료 직전에만 저장됨.
+    # --save_every_n_steps >0 이면 step 기반 저장으로 전환한다.
+    if args.save_every_n_steps > 0:
+        ckpt_freq_kwargs = dict(
+            every_n_train_steps=args.save_every_n_steps,
+            every_n_epochs=0,
+        )
+    else:
+        ckpt_freq_kwargs = dict(every_n_epochs=args.save_every_n_epochs)
+
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
         filename="epoch{epoch:03d}-step{step}",
         save_last=True,
         save_top_k=-1,
-        every_n_epochs=args.save_every_n_epochs,
+        **ckpt_freq_kwargs,
     )
 
     callbacks = [checkpoint_callback]

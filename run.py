@@ -8,7 +8,28 @@ from torch.optim.swa_utils import get_ema_avg_fn
 
 from src.cli import parse_args
 from src.data import create_dataloaders
-from src.model_factory import SELF_LOADING_TASK_NAMES, build_model, get_focus_token_id
+from src.model_factory import (
+    SELF_LOADING_TASK_NAMES,
+    TOY_TASK_NAMES,
+    build_model,
+    get_focus_token_id,
+)
+
+
+# IterableDataset 기반 태스크 — epoch 경계가 max_steps 종료 시점뿐이라
+# epoch 기반 체크포인트 저장이 사실상 작동 안 함. 이 태스크들은 step 기반 저장이 기본.
+_DEFAULT_STEP_SAVE_TASKS = TOY_TASK_NAMES
+_AUTO_STEP_SAVE_INTERVAL = 50000
+
+
+def resolve_save_every_n_steps(args) -> int:
+    """`--save_every_n_steps` 의 -1(auto) 값을 task 종류에 따라 해석."""
+    if args.save_every_n_steps >= 0:
+        return args.save_every_n_steps
+    # auto: IterableDataset 태스크는 50000 step, epoch 기반 태스크는 0(=비활성).
+    if args.task in _DEFAULT_STEP_SAVE_TASKS:
+        return _AUTO_STEP_SAVE_INTERVAL
+    return 0
 
 
 torch.set_float32_matmul_precision("medium")
@@ -70,9 +91,11 @@ def main():
     # IterableDataset 기반 태스크 (parity, addition, copy 등) 는 epoch 경계가
     # max_steps 종료 시점뿐이라 every_n_epochs=1 로는 학습 종료 직전에만 저장됨.
     # --save_every_n_steps >0 이면 step 기반 저장으로 전환한다.
-    if args.save_every_n_steps > 0:
+    # PL 은 every_n_train_steps 와 every_n_epochs 동시 활성을 금지하므로 둘 중 하나만 사용.
+    save_every_n_steps = resolve_save_every_n_steps(args)
+    if save_every_n_steps > 0:
         ckpt_freq_kwargs = dict(
-            every_n_train_steps=args.save_every_n_steps,
+            every_n_train_steps=save_every_n_steps,
             every_n_epochs=0,
         )
     else:

@@ -37,6 +37,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default_root_dir", type=str, default="runs")
     parser.add_argument("--resume_ckpt", type=str, default=None)
     parser.add_argument("--save_every_n_epochs", type=int, default=1)
+    parser.add_argument(
+        "--save_every_n_steps",
+        type=int,
+        default=-1,
+        help=(
+            "체크포인트 step 저장 주기. "
+            "-1(기본)=auto: IterableDataset 기반 toy/algorithmic/NLP 태스크는 50000 step, "
+            "epoch 기반 태스크(sudoku/maze/babi)는 0(=비활성, --save_every_n_epochs 사용)으로 자동 적용. "
+            "0=명시적 비활성. >0=명시적 step 주기. "
+            "주의: PL 은 --save_every_n_steps 와 --save_every_n_epochs 동시 활성을 금지하므로 "
+            ">0 으로 두면 epoch 기반 저장은 비활성된다."
+        ),
+    )
     parser.add_argument("--max_steps", type=int, default=200000)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--data_workers", type=int, default=1)

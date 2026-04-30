@@ -17,3 +17,7 @@ data/
 .DS_Store
 .idea/
 .vscode/
+.claude/
+
+# Local sanity-check / debug scripts (one-off, not part of the pipeline)
+debug_*.py

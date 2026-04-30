@@ -259,13 +259,12 @@ Graves 2016 §4.1: 입력 64 비트 (`bits=64`) ±1 sparsity, RNN with **tanh** 
 > 깊은 pondering 이 필요하면 음수 bias 를 쓴다: `-2.0` → 초기 ~9 step, `-3.0` → ~22 step.
 
 ```bash
-# ACT-RNN (Graves 2016 스펙) — 17K param 짜리 작은 모델이라 batch 크게 잡아도 메모리 여유.
-# ACT-RNN (Graves 2016 스펙, 깊은 ACT pondering 용 음수 halt bias)
+# ACT-RNN (Graves 2016 스펙, 깊은 ACT pondering 용 음수 halt bias).
+# 17K param 짜리 작은 모델이라 batch 크게 잡아도 메모리 여유.
 uv run python run.py \
   --task parity \
   --model_type act_rnn --rnn_cell_type tanh_rnn \
   --bits 64 --hidden_size 128 \
-  --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias 1.0 \
   --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias -2.0 \
   --learning_rate 1e-3 \
   --batch_size 128 --max_steps 200000 \

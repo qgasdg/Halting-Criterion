@@ -245,6 +245,8 @@ python train.py \
 Parity/Addition은 기존 `tasks/*.py` 단독 실행도 가능하지만,
 현재는 `train.py --task parity|addition`으로 **maze/sudoku와 동일한 진입점에서 관리**하는 방식을 권장합니다.
 
+> **§6.x batch size 노트.** Graves 2016 / UT 논문은 batch size 를 명시하지 않아, 아래 예제의 `--batch_size` 값은 **A6000 48GB 기준 throughput 을 고려한 권장치**입니다 (작은 모델 = 큰 batch). OOM 시 절반으로 줄이세요. CLI 기본값 (`--batch_size 64`) 은 보수적인 중간값입니다.
+
 ## 6.1 Parity (ACT-RNN / UT 공통, Graves 2016 §4.1)
 
 Graves 2016 §4.1: 입력 64 비트 (`bits=64`) ±1 sparsity, RNN with **tanh** activation, hidden 128, time_limit 100, time_penalty sweep 1e-4..1e-1. UT 논문은 동일 태스크에서 hidden_size=128, ACT 사용.
@@ -257,11 +259,13 @@ Graves 2016 §4.1: 입력 64 비트 (`bits=64`) ±1 sparsity, RNN with **tanh** 
 > 깊은 pondering 이 필요하면 음수 bias 를 쓴다: `-2.0` → 초기 ~9 step, `-3.0` → ~22 step.
 
 ```bash
+# ACT-RNN (Graves 2016 스펙) — 17K param 짜리 작은 모델이라 batch 크게 잡아도 메모리 여유.
 # ACT-RNN (Graves 2016 스펙, 깊은 ACT pondering 용 음수 halt bias)
 uv run python run.py \
   --task parity \
   --model_type act_rnn --rnn_cell_type tanh_rnn \
   --bits 64 --hidden_size 128 \
+  --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias 1.0 \
   --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias -2.0 \
   --learning_rate 1e-3 \
   --batch_size 128 --max_steps 200000 \
@@ -274,7 +278,7 @@ uv run python run.py \
   --ut_act --ut_act_loss_weight 1e-3 --ut_halt_bias 1.0 \
   --bits 64 --hidden_size 128 \
   --ut_heads 4 --ut_max_hops 8 \
-  --batch_size 16 --max_steps 200000 \
+  --batch_size 64 --max_steps 200000 \
   --default_root_dir runs/parity_ut
 ```
 
@@ -290,7 +294,7 @@ uv run python run.py \
   --sequence_length 5 --max_digits 5 \
   --hidden_size 512 \
   --time_limit 20 --time_penalty 1e-3 --rnn_halt_bias 1.0 \
-  --batch_size 16 --max_steps 200000 \
+  --batch_size 64 --max_steps 200000 \
   --default_root_dir runs/addition_rnn
 
 # Universal Transformer
@@ -300,7 +304,7 @@ uv run python run.py \
   --ut_act --ut_act_loss_weight 1e-3 --ut_halt_bias 1.0 \
   --sequence_length 5 --max_digits 5 \
   --hidden_size 512 --ut_heads 4 --ut_max_hops 8 \
-  --batch_size 16 --max_steps 200000 \
+  --batch_size 64 --max_steps 200000 \
   --default_root_dir runs/addition_ut
 ```
 
@@ -358,7 +362,7 @@ uv run python run.py \
   --hidden_size 128 \
   --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias 1.0 \
   --logic_train_max_steps 10 --logic_eval_max_steps 10 \
-  --batch_size 16 --max_steps 200000 \
+  --batch_size 128 --max_steps 200000 \
   --default_root_dir runs/logic_rnn
 ```
 
@@ -373,7 +377,7 @@ uv run python run.py \
   --hidden_size 512 \
   --time_limit 100 --time_penalty 1e-3 --rnn_halt_bias 1.0 \
   --sort_min_n 2 --sort_max_n 15 \
-  --batch_size 16 --max_steps 200000 \
+  --batch_size 64 --max_steps 200000 \
   --default_root_dir runs/sort_rnn
 ```
 

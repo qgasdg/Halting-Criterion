@@ -2,13 +2,75 @@ import argparse
 import os
 
 
+# Graves 2016 ACT 논문 §3.1~3.4 의 태스크별 하이퍼파라미터.
+# CLI 에서 명시적으로 값이 주어지지 않은 경우(=None)에만 적용됨.
+TASK_DEFAULTS = {
+    "parity": {
+        "max_steps": 1_000_000,
+        "batch_size": 128,
+        "hidden_size": 128,
+        "rnn_cell_type": "tanh_rnn",
+        "bits": 64,
+    },
+    "logic": {
+        "max_steps": 1_000_000,
+        "batch_size": 16,
+        "hidden_size": 128,
+        "rnn_cell_type": "lstm",
+    },
+    "addition": {
+        "max_steps": 1_000_000,
+        "batch_size": 32,
+        "rnn_cell_type": "lstm",
+    },
+    "sort": {
+        "max_steps": 1_000_000,
+        "batch_size": 16,
+        "rnn_cell_type": "lstm",
+    },
+}
+
+# 태스크별 default 가 없을 때 쓰는 글로벌 fallback.
+GLOBAL_DEFAULTS = {
+    "max_steps": 200_000,
+    "batch_size": 64,
+    "hidden_size": 512,
+    "rnn_cell_type": "gru",
+    "bits": 16,
+}
+
+_RESOLVABLE_KEYS = tuple(GLOBAL_DEFAULTS.keys())
+
+
+def apply_task_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """args 에서 None 인 인자를 task별 default → global default 순으로 채운다.
+
+    유저가 CLI 로 명시한 값(=None 이 아님)은 그대로 유지된다.
+    """
+    task_dict = TASK_DEFAULTS.get(args.task, {})
+    for key in _RESOLVABLE_KEYS:
+        if getattr(args, key, None) is None:
+            setattr(args, key, task_dict.get(key, GLOBAL_DEFAULTS[key]))
+    return args
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--data_dir", type=str, default=None)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=None,
+        help="배치 크기. 미지정 시 태스크별 논문 기본값(parity=128, logic/sort=16, addition=32, 그 외=64).",
+    )
     parser.add_argument("--max_epochs", type=int, default=10)
-    parser.add_argument("--hidden_size", type=int, default=512)
+    parser.add_argument(
+        "--hidden_size",
+        type=int,
+        default=None,
+        help="은닉 차원. 미지정 시 태스크별 논문 기본값(parity/logic=128, 그 외=512).",
+    )
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.1)
     parser.add_argument("--lr_warmup_epochs", type=int, default=5)
@@ -50,7 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
             ">0 으로 두면 epoch 기반 저장은 비활성된다."
         ),
     )
-    parser.add_argument("--max_steps", type=int, default=200000)
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=None,
+        help="최대 학습 step. 미지정 시 태스크별 논문 기본값(parity/logic/addition/sort=1,000,000, 그 외=200,000).",
+    )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--data_workers", type=int, default=1)
     parser.add_argument("--log_every_n_steps", type=int, default=1)
@@ -74,9 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
     act_group.add_argument(
         "--rnn_cell_type",
         type=str,
-        default="gru",
+        default=None,
         choices=["gru", "lstm", "tanh_rnn"],
-        help="ACT RNN 내부 셀 종류. Graves 2016 스펙: parity=tanh_rnn, logic/addition/sort/wiki=lstm.",
+        help=(
+            "ACT RNN 내부 셀 종류. 미지정 시 Graves 2016 스펙 자동 적용: "
+            "parity=tanh_rnn, logic/addition/sort=lstm, 그 외=gru."
+        ),
     )
 
     ut_group = parser.add_argument_group("Universal Transformer options")
@@ -97,7 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     toy_group = parser.add_argument_group("Toy task options")
-    toy_group.add_argument("--bits", type=int, default=16)
+    toy_group.add_argument(
+        "--bits",
+        type=int,
+        default=None,
+        help="Parity 시퀀스 비트 수. 미지정 시 Graves 2016 §3.1 기본값(64), parity 외 태스크엔 16.",
+    )
     toy_group.add_argument("--sequence_length", type=int, default=5)
     toy_group.add_argument("--max_digits", type=int, default=5)
     toy_group.add_argument("--string_addition_max_terms", type=int, default=2)
@@ -248,4 +323,5 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args():
-    return build_parser().parse_args()
+    args = build_parser().parse_args()
+    return apply_task_defaults(args)

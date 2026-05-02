@@ -120,7 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--data_workers", type=int, default=1)
-    parser.add_argument("--log_every_n_steps", type=int, default=1)
+    parser.add_argument(
+        "--log_every_n_steps",
+        type=int,
+        default=100,
+        help="Lightning 로그/wandb 기록 주기. 기본 100 (이전 1). NaN/Inf 이상치는 cadence 무관 즉시 기록됨.",
+    )
     parser.add_argument(
         "--disable_ponder_cost",
         action="store_true",

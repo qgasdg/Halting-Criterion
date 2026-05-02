@@ -8,6 +8,7 @@ from torch.optim.swa_utils import get_ema_avg_fn
 
 from src.cli import parse_args
 from src.data import create_dataloaders
+from src.gradient_health import GradientHealthCallback
 from src.model_factory import build_model, get_focus_token_id
 
 
@@ -75,7 +76,7 @@ def main():
         every_n_epochs=args.save_every_n_epochs,
     )
 
-    callbacks = [checkpoint_callback]
+    callbacks = [checkpoint_callback, GradientHealthCallback()]
     if args.use_ema:
         callbacks.append(
             StochasticWeightAveraging(

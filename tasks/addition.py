@@ -28,7 +28,7 @@ class AdditionDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
     EMPTY_TOKEN = "-"
     VOCABULARY = string.digits + EMPTY_TOKEN
 
-    def __init__(self, sequence_length: int, max_digits: int):
+    def __init__(self, sequence_length: int, max_digits: int, random_sequence_length: bool = True):
         if sequence_length <= 0:
             raise ValueError("sequence_length must be at least 1.")
         if max_digits <= 0:
@@ -36,6 +36,7 @@ class AdditionDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
 
         self.sequence_length = sequence_length
         self.max_digits = max_digits
+        self.random_sequence_length = random_sequence_length
         self.feature_size = self.NUM_DIGITS * max_digits
         self.target_size = max_digits + math.ceil(math.log10(sequence_length))
 
@@ -44,11 +45,16 @@ class AdditionDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
             yield self._make_example()
 
     def _make_example(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        cumsum = 0
-        features = torch.empty([self.sequence_length, self.feature_size], dtype=torch.float32)
-        targets = torch.empty([self.sequence_length, self.target_size], dtype=torch.long)
+        if self.random_sequence_length:
+            actual_length = random.randint(1, self.sequence_length)
+        else:
+            actual_length = self.sequence_length
 
-        for idx in range(self.sequence_length):
+        cumsum = 0
+        features = torch.empty([actual_length, self.feature_size], dtype=torch.float32)
+        targets = torch.empty([actual_length, self.target_size], dtype=torch.long)
+
+        for idx in range(actual_length):
             number, digits = self._get_number_and_digits()
             cumsum += number
             features[idx] = torch.cat([self._onehot(token) for token in digits])
@@ -98,10 +104,11 @@ class AdditionDataset(torch.utils.data.IterableDataset):  # type: ignore[misc]
 
 
 class FixedAdditionDataset(torch.utils.data.Dataset):  # type: ignore[misc]
-    def __init__(self, sequence_length: int, max_digits: int, size: int, seed: int):
+    def __init__(self, sequence_length: int, max_digits: int, size: int, seed: int,
+                 random_sequence_length: bool = True):
         if size <= 0:
             raise ValueError("size must be at least one.")
-        self.generator_dataset = AdditionDataset(sequence_length, max_digits)
+        self.generator_dataset = AdditionDataset(sequence_length, max_digits, random_sequence_length)
         self.size = size
         random_state = random.getstate()
         random.seed(seed)
@@ -148,16 +155,19 @@ class AdditionModel(pl.LightningModule):
         ut_halt_bias: float = 1.0,
         ut_attention_mode: str = "auto",
         rnn_cell_type: str = "gru",
+        random_sequence_length: bool = True,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        self.dataset = AdditionDataset(sequence_length, max_digits)
+        self.dataset = AdditionDataset(sequence_length, max_digits, random_sequence_length)
         self.model_type = model_type
         self.output_layer = torch.nn.Linear(hidden_size, self.dataset.target_size * AdditionDataset.NUM_CLASSES)
 
-        self.val_dataset = FixedAdditionDataset(sequence_length, max_digits, val_size, eval_seed)
-        self.test_dataset = FixedAdditionDataset(sequence_length, max_digits, test_size, eval_seed + 1)
+        self.val_dataset = FixedAdditionDataset(sequence_length, max_digits, val_size, eval_seed,
+                                                random_sequence_length)
+        self.test_dataset = FixedAdditionDataset(sequence_length, max_digits, test_size, eval_seed + 1,
+                                                 random_sequence_length)
 
         if model_type == "act_rnn":
             self.rnn_cell = AdaptiveRNNCell(
@@ -443,6 +453,8 @@ def main() -> None:
     parser.add_argument("--ut_value_depth", type=int, default=128)
     parser.add_argument("--ut_filter_size", type=int, default=256)
     parser.add_argument("--ut_attention_mode", type=str, default="auto", choices=["auto", "full", "causal"])
+    parser.add_argument("--fixed_sequence_length", action="store_true",
+                        help="Disable random sequence length sampling (Graves 2016 uses random 1..sequence_length).")
     parser.add_argument("--val_size", type=int, default=10000)
     parser.add_argument("--eval_seed", type=int, default=1234)
     parser.add_argument("--default_root_dir", type=str, default="runs")
@@ -472,6 +484,7 @@ def main() -> None:
         eval_seed=args.eval_seed,
         halt_warmup_steps=args.halt_warmup_steps,
         ut_attention_mode=args.ut_attention_mode,
+        random_sequence_length=not args.fixed_sequence_length,
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{args.default_root_dir}/checkpoints",

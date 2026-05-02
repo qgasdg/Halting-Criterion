@@ -106,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     toy_group.add_argument("--toy_val_size", type=int, default=10000)
     toy_group.add_argument("--toy_test_size", type=int, default=50000)
     toy_group.add_argument("--toy_eval_seed", type=int, default=1234)
+    toy_group.add_argument(
+        "--fixed_sequence_length",
+        action="store_true",
+        help="Addition: 시퀀스 길이를 고정. 기본은 Graves 2016처럼 1..sequence_length 랜덤 샘플링.",
+    )
     toy_group.add_argument("--parity_near_ood_bits", type=int, default=None)
     toy_group.add_argument("--parity_ood_bits", type=int, default=None)
     toy_group.add_argument("--halt_warmup_steps", type=int, default=0)

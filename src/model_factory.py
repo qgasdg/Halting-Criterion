@@ -206,6 +206,7 @@ def build_model(args, meta, focus_token_id):
             ut_halt_bias=args.ut_halt_bias,
             ut_attention_mode=ut_attention_mode,
             rnn_cell_type=args.rnn_cell_type,
+            random_sequence_length=not args.fixed_sequence_length,
         )
 
     if args.task in {"copy", "reverse"}:

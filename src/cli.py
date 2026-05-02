@@ -305,7 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     wandb_group = parser.add_argument_group("Weights & Biases options")
-    wandb_group.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    wandb_group.add_argument(
+        "--wandb",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Weights & Biases logging (default: on; pass --no-wandb to disable).",
+    )
     wandb_group.add_argument("--wandb_project", type=str, default=os.getenv("WANDB_PROJECT", "halting-criterion"))
     wandb_group.add_argument("--wandb_entity", type=str, default=os.getenv("WANDB_ENTITY"))
     wandb_group.add_argument("--wandb_name", type=str, default=os.getenv("WANDB_NAME"))
